@@ -1,0 +1,39 @@
+config:
+  hyperparams:
+  - default: round-1
+    description: Communication id shared between clients and aggregator for one federated round.
+    maxValue: null
+    minValue: null
+    name: communication_id
+    options: []
+    pattern: null
+    type: STRING
+  - default: result.csv
+    description: CSV file written by each client into its local output directory.
+    maxValue: null
+    minValue: null
+    name: output_filename
+    options: []
+    pattern: null
+    type: STRING
+  input: []
+  output:
+  - delimiter: ','
+    description: Client-side aggregated response written by each participant.
+    hasHeader: true
+    indexCol: null
+    maxValue: null
+    minValue: null
+    mode: null
+    name: output
+    required: false
+    shape: null
+    tabularSchema: null
+    type: CSV
+info:
+  longDescription: Simple federated mean demo using CSV input for clients and CSV output for participants.
+  name: Federated Mean Demo
+  shortDescription: Minimal federated simulation with configurable CSV filenames.
+  slug: federated-mean-demoasf
+  sourceUrl: https://github.com/FeatureCloud/fc-random-forest
+  type: ANALYSIS

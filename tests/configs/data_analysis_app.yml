@@ -1,0 +1,37 @@
+config:
+  hyperparams:
+  - default: '2'
+    description: The row to assign the file to.
+    maxValue: null
+    minValue: null
+    name: multiplier
+    type: INTEGER
+  input:
+  - delimiter: null
+    description: Input for the transformationen, autogen
+    hasHeader: null
+    maxValue: null
+    minValue: null
+    name: input
+    required: true
+    shape: null
+    tabularSchema: null
+    type: CSV
+  output:
+  - delimiter: null
+    description: output for the transformationen, autogen
+    hasHeader: null
+    maxValue: null
+    minValue: null
+    name: output
+    required: false
+    shape: null
+    tabularSchema: null
+    type: CSV
+info:
+  longDescription: null
+  name: BioStatProject
+  shortDescription: PoSyMed4U BioStatProject
+  slug: biostatproject
+  sourceUrl: https://github.com/FeatureCloud/fc-random-forest
+  type: ANALYSIS

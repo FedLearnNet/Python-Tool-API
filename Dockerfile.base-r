@@ -1,0 +1,30 @@
+# Use the Ubuntu‐based rocker R image
+FROM bioconductor/bioconductor_docker:3.21
+
+WORKDIR /app
+
+
+
+ARG PYFEDAPPWRAP_VERSION=0.6.11
+ARG FEDDB_IMAGE_BUILD_DATE=unknown
+
+ENV R_HOME=/usr/lib/R \
+    PATH="/opt/venv/bin:${PATH}" \
+    PYTHONUNBUFFERED=1 \
+    PYFEDAPPWRAP_VERSION=${PYFEDAPPWRAP_VERSION} \
+    FEDDB_IMAGE_FAMILY=base-r-bioconductor \
+    FEDDB_IMAGE_BUILD_DATE=${FEDDB_IMAGE_BUILD_DATE} \
+    FEDDB_BASE_IMAGE=bioconductor/bioconductor_docker:3.21
+
+RUN python3 -m venv /opt/venv
+
+COPY requirements.txt .
+RUN pip install --no-cache-dir -r requirements.txt
+
+RUN pip install -i https://test.pypi.org/simple/ pyfedappwrap==0.6.11 --no-deps
+
+COPY docker-entrypoint.sh /usr/local/bin/docker-entrypoint.sh
+RUN chmod 0755 /usr/local/bin/docker-entrypoint.sh
+
+ENTRYPOINT ["/usr/local/bin/docker-entrypoint.sh"]
+CMD ["python", "main.py"]

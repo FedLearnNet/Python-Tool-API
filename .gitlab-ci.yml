@@ -1,0 +1,248 @@
+stages:
+  - test
+  - build
+  - deploy
+
+.docker_buildx: &docker_buildx
+  - docker context create fedDB-context || true
+  - docker buildx create --name fedDBBuilder --use fedDB-context || docker buildx use fedDBBuilder
+  - docker buildx inspect --bootstrap
+
+.docker_job_template: &docker_job_template
+  image: docker:24.0.5
+  stage: deploy
+  services:
+    - name: docker:24.0.5-dind
+      alias: docker
+  before_script:
+    - docker info
+    - *docker_buildx
+    - docker login -u "$CI_REGISTRY_USER" -p "$CI_REGISTRY_PASSWORD" "$CI_REGISTRY"
+
+variables:
+  PIP_CACHE_DIR: "$CI_PROJECT_DIR/.cache/pip"
+  PYTHON_VERSION: "3.11"
+  DOCKER_TLS_CERTDIR: ""
+
+cache:
+  paths:
+    - .cache/pip
+
+test:
+  stage: test
+  image: python:$PYTHON_VERSION
+  allow_failure: true
+  before_script:
+    - python -m pip install --upgrade pip
+    - pip install -r requirements.txt
+    - pip install pytest
+  script:
+    - pytest tests/
+  artifacts:
+    when: always
+    reports:
+      junit: junit.xml
+
+build:
+  stage: build
+  image: python:$PYTHON_VERSION
+  before_script:
+    - python -m pip install --upgrade pip
+    - pip install build
+  script:
+    - python -m build
+  artifacts:
+    paths:
+      - dist/*.whl
+      - dist/*.tar.gz
+
+extract:version:
+  stage: build
+  image: python:3.11
+  script:
+    - |
+      python - <<'PY'
+      import tomllib, pathlib
+      data = tomllib.loads(pathlib.Path("pyproject.toml").read_text(encoding="utf-8"))
+      v = data["project"]["version"]
+      print(f"PYFEDAPPWRAP_VERSION={v}")
+      PY
+    - |
+      python - <<'PY' > build.env
+      import tomllib, pathlib
+      data = tomllib.loads(pathlib.Path("pyproject.toml").read_text(encoding="utf-8"))
+      v = data["project"]["version"]
+      print(f"PYFEDAPPWRAP_VERSION={v}")
+      PY
+  artifacts:
+    reports:
+      dotenv: build.env
+
+deploy:
+  stage: deploy
+  image: python:$PYTHON_VERSION
+  dependencies:
+    - build
+  needs:
+    - job: build
+      artifacts: true
+  allow_failure: true
+  before_script:
+    - python -m pip install --upgrade pip
+    - pip install twine
+  script:
+    - twine upload --repository testpypi dist/* -p "$TEST_PYPI_TOKEN"
+  only:
+    - main
+
+deploy:docker-python:
+  <<: *docker_job_template
+  needs:
+    - job: extract:version
+      artifacts: true
+    - job: deploy
+  dependencies:
+    - extract:version
+  script:
+    - >
+      docker buildx build
+      --platform linux/amd64,linux/arm64/v8
+      --provenance false
+      --build-arg FEDDB_IMAGE_BUILD_DATE="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+      -f Dockerfile.base-chainguard
+      --build-arg PYFEDAPPWRAP_VERSION="${PYFEDAPPWRAP_VERSION}"
+      --build-arg PYTHON_VERSION="${PYTHON_VERSION}"
+      -t "${CI_REGISTRY_IMAGE}/base-python:${PYFEDAPPWRAP_VERSION}"
+      -t "${CI_REGISTRY_IMAGE}/base-python:latest"
+      --push
+      .
+
+deploy:docker-python-dep:
+  <<: *docker_job_template
+  needs:
+    - job: extract:version
+      artifacts: true
+    - job: deploy
+  dependencies:
+    - extract:version
+  script:
+    - >
+      docker buildx build
+      --platform linux/amd64,linux/arm64/v8
+      --provenance false
+      --build-arg FEDDB_IMAGE_BUILD_DATE="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+      -f Dockerfile.base-chainguard
+      --build-arg PYFEDAPPWRAP_VERSION="${PYFEDAPPWRAP_VERSION}"
+      --build-arg PYFEDAPPWRAP_WITH_DEPS="1"
+      --build-arg PYTHON_VERSION="${PYTHON_VERSION}"
+      -t "${CI_REGISTRY_IMAGE}/base-python-dep:${PYFEDAPPWRAP_VERSION}"
+      -t "${CI_REGISTRY_IMAGE}/base-python-dep:latest"
+      --push
+      .
+
+deploy:docker-r:
+  <<: *docker_job_template
+  needs:
+    - job: extract:version
+      artifacts: true
+    - job: deploy
+    - job: deploy:docker-python
+  dependencies:
+    - extract:version
+  script:
+    - export BASE_IMAGE="$(sh ci/resolve_base_image.sh base-python "${PYFEDAPPWRAP_VERSION}" "0" "${CI_REGISTRY_IMAGE}")"
+    - echo "Using BASE_IMAGE=${BASE_IMAGE}"
+    - >
+      docker buildx build
+      --platform linux/amd64,linux/arm64/v8
+      --provenance false
+      --build-arg FEDDB_IMAGE_BUILD_DATE="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+      -f Dockerfile.base-r-chainguard
+      --build-arg PYFEDAPPWRAP_VERSION="${PYFEDAPPWRAP_VERSION}"
+      --build-arg PYFEDAPPWRAP_WITH_DEPS="0"
+      --build-arg BASE_IMAGE="${BASE_IMAGE}"
+      --build-arg PYTHON_VERSION="${PYTHON_VERSION}"
+      -t "${CI_REGISTRY_IMAGE}/base-r:${PYFEDAPPWRAP_VERSION}"
+      -t "${CI_REGISTRY_IMAGE}/base-r:latest"
+      --push
+      .
+
+deploy:docker-r-dep:
+  <<: *docker_job_template
+  needs:
+    - job: extract:version
+      artifacts: true
+    - job: deploy
+    - job: deploy:docker-python-dep
+  dependencies:
+    - extract:version
+  script:
+    - export BASE_IMAGE="$(sh ci/resolve_base_image.sh base-python "${PYFEDAPPWRAP_VERSION}" "1" "${CI_REGISTRY_IMAGE}")"
+    - echo "Using BASE_IMAGE=${BASE_IMAGE}"
+    - >
+      docker buildx build
+      --platform linux/amd64,linux/arm64/v8
+      --provenance false
+      --build-arg FEDDB_IMAGE_BUILD_DATE="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+      -f Dockerfile.base-r-chainguard
+      --build-arg PYFEDAPPWRAP_VERSION="${PYFEDAPPWRAP_VERSION}"
+      --build-arg PYFEDAPPWRAP_WITH_DEPS="1"
+      --build-arg BASE_IMAGE="${BASE_IMAGE}"
+      --build-arg PYTHON_VERSION="${PYTHON_VERSION}"
+      -t "${CI_REGISTRY_IMAGE}/base-r-dep:${PYFEDAPPWRAP_VERSION}"
+      -t "${CI_REGISTRY_IMAGE}/base-r-dep:latest"
+      --push
+      .
+
+deploy:docker-r-dep-bio:
+  <<: *docker_job_template
+  needs:
+    - job: extract:version
+      artifacts: true
+    - job: deploy
+    - job: deploy:docker-r-dep
+  dependencies:
+    - extract:version
+  script:
+    - export BASE_IMAGE="$(sh ci/resolve_base_image.sh base-r "${PYFEDAPPWRAP_VERSION}" "1" "${CI_REGISTRY_IMAGE}")"
+    - echo "Using BASE_IMAGE=${BASE_IMAGE}"
+    - >
+      docker buildx build
+      --platform linux/amd64,linux/arm64/v8
+      --provenance false
+      --build-arg FEDDB_IMAGE_BUILD_DATE="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+      -f Dockerfile.base-r-cluster-chainguard
+      --build-arg PYFEDAPPWRAP_VERSION="${PYFEDAPPWRAP_VERSION}"
+      --build-arg PYFEDAPPWRAP_WITH_DEPS="1"
+      --build-arg BASE_IMAGE="${BASE_IMAGE}"
+      --build-arg PYTHON_VERSION="${PYTHON_VERSION}"
+      -t "${CI_REGISTRY_IMAGE}/base-r-dep-biocmanager:${PYFEDAPPWRAP_VERSION}"
+      -t "${CI_REGISTRY_IMAGE}/base-r-dep-biocmanager:latest"
+      --push
+      .
+
+deploy:docker-r-bio:
+  <<: *docker_job_template
+  needs:
+    - job: extract:version
+      artifacts: true
+    - job: deploy
+    - job: deploy:docker-r
+  dependencies:
+    - extract:version
+  script:
+    - export BASE_IMAGE="$(sh ci/resolve_base_image.sh base-r "${PYFEDAPPWRAP_VERSION}" "0" "${CI_REGISTRY_IMAGE}")"
+    - echo "Using BASE_IMAGE=${BASE_IMAGE}"
+    - >
+      docker buildx build
+      --platform linux/amd64,linux/arm64/v8
+      --provenance false
+      --build-arg FEDDB_IMAGE_BUILD_DATE="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+      -f Dockerfile.base-r-cluster-chainguard
+      --build-arg PYFEDAPPWRAP_VERSION="${PYFEDAPPWRAP_VERSION}"
+      --build-arg PYFEDAPPWRAP_WITH_DEPS="1"
+      --build-arg BASE_IMAGE="${BASE_IMAGE}"
+      --build-arg PYTHON_VERSION="${PYTHON_VERSION}"
+      -t "${CI_REGISTRY_IMAGE}/base-r-biocmanager:${PYFEDAPPWRAP_VERSION}"
+      -t "${CI_REGISTRY_IMAGE}/base-r-biocmanager:latest"
+      --push

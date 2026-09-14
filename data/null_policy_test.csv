@@ -1,0 +1,24 @@
+a,b,c,d,e
+,"","   ",NULL,0
+x,y,z,ok,1
+foo,bar,baz,none,2
+hello,"",world,NA,0.0
+alpha,beta,"   ",n/a,3
+gamma,delta,epsilon,valid,4
+,,theta,NULL,5
+one,two,three,four,6
+apple,banana,carrot,ok,7
+dog,cat,mouse,NULL,0
+red,green,blue,none,8
+sun,moon,stars,ok,9
+a1,b1,c1,NA,10
+a2,b2,c2,ok,11
+a3,"",c3,ok,12
+a4,b4,"   ",ok,13
+a5,b5,c5,n/a,0
+valid,row,data,ok,14
+more,rows,here,ok,15
+even,more,data,ok,16
+sample,test,line,ok,17
+csv,with,values,ok,18
+last,row,here,ok,19

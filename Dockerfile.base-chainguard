@@ -1,0 +1,47 @@
+ARG WOLFI_BASE_IMAGE=cgr.dev/chainguard/wolfi-base:latest
+FROM ${WOLFI_BASE_IMAGE}
+
+# re-declared after FROM so the value is usable in ENV/RUN below
+ARG WOLFI_BASE_IMAGE
+ARG PYTHON_VERSION=3.11
+ARG PYFEDAPPWRAP_VERSION=0.6.15
+#pyfedappwrap deps (0 = no deps, 1 = with deps)
+ARG PYFEDAPPWRAP_WITH_DEPS=0
+
+ARG FEDDB_IMAGE_BUILD_DATE=unknown
+
+WORKDIR /app
+ENV PATH="/opt/venv/bin:${PATH}" \
+    PYTHONDONTWRITEBYTECODE=1 \
+    PYTHONUNBUFFERED=1 \
+    PYFEDAPPWRAP_VERSION=${PYFEDAPPWRAP_VERSION} \
+    FEDDB_IMAGE_FAMILY=base-python \
+    FEDDB_IMAGE_BUILD_DATE=${FEDDB_IMAGE_BUILD_DATE} \
+    FEDDB_BASE_IMAGE=${WOLFI_BASE_IMAGE}
+
+RUN apk add --no-cache \
+      python-${PYTHON_VERSION} \
+      py${PYTHON_VERSION}-pip \
+      build-base
+
+RUN python -m venv /opt/venv
+
+RUN set -eux; \
+    PIP_INDEX="https://test.pypi.org/simple/"; \
+    if [ "${PYFEDAPPWRAP_WITH_DEPS}" = "1" ] || [ "${PYFEDAPPWRAP_WITH_DEPS}" = "true" ]; then \
+      pip install --no-cache-dir --extra-index-url "${PIP_INDEX}" "pyfedappwrap==${PYFEDAPPWRAP_VERSION}"; \
+    else \
+      pip install --no-cache-dir -i "${PIP_INDEX}" "pyfedappwrap==${PYFEDAPPWRAP_VERSION}" --no-deps; \
+    fi
+
+
+COPY docker-entrypoint.sh /usr/local/bin/docker-entrypoint.sh
+RUN chmod 0755 /usr/local/bin/docker-entrypoint.sh
+
+RUN mkdir -p /app /mnt/input /mnt/output && \
+    chown -R nonroot:nonroot /app /mnt/input /mnt/output /opt/venv
+USER nonroot
+
+
+ENTRYPOINT ["/usr/local/bin/docker-entrypoint.sh"]
+CMD ["python", "main.py"]

@@ -1,0 +1,8 @@
+[MAIN]
+
+disable=
+    missing-module-docstring,
+    fixme,
+    unnecessary-lambda,
+    too-few-public-methods,
+    too-many-instance-attributes

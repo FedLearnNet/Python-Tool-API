@@ -1,0 +1,73 @@
+ARG PYFEDAPPWRAP_VERSION=0.6.15
+ARG PYFEDAPPWRAP_WITH_DEPS=0
+ARG R_DEPS=0
+ARG BASE_IMAGE=gitlab.cosy.bio:5050/cosybio/federated-learning/federated_db/pyfedappwrap/base-python:0.6.15
+
+FROM ${BASE_IMAGE}
+
+# re-declared after FROM so the values are usable in ENV below
+ARG PYFEDAPPWRAP_VERSION
+ARG BASE_IMAGE
+ARG FEDDB_IMAGE_BUILD_DATE=unknown
+
+WORKDIR /app
+
+ENV PATH="/opt/venv/bin:${PATH}" \
+    PYTHONDONTWRITEBYTECODE=1 \
+    PYTHONUNBUFFERED=1 \
+    PYFEDAPPWRAP_VERSION=${PYFEDAPPWRAP_VERSION} \
+    FEDDB_IMAGE_FAMILY=base-r \
+    FEDDB_IMAGE_BUILD_DATE=${FEDDB_IMAGE_BUILD_DATE} \
+    FEDDB_BASE_IMAGE=${BASE_IMAGE} \
+    R_HOME=/usr/lib/R \
+    R_LIBS_SITE=/usr/local/lib/R/site-library \
+    R_LIBS_USER=/home/nonroot/R/library \
+    R_SHARE_DIR=/usr/share/R/share \
+    R_INCLUDE_DIR=/usr/share/R/include \
+    R_DOC_DIR=/usr/share/R/doc \
+    LD_LIBRARY_PATH=/usr/lib/R/lib:/usr/lib
+
+USER root
+
+RUN apk add --no-cache \
+      R \
+      R-dev \
+      curl \
+      git \
+      openssl \
+      openssl-dev \
+      libxml2 \
+      libxml2-dev \
+      zlib \
+      zlib-dev \
+      bzip2 \
+      bzip2-dev \
+      xz \
+      xz-dev \
+      pcre2 \
+      pcre2-dev \
+      icu-libs \
+      icu-dev \
+      build-base \
+      gfortran \
+      linux-headers
+
+RUN set -eux; \
+    mkdir -p /usr/local/lib/R/site-library "${R_LIBS_USER}"; \
+    chmod -R 755 /usr/local/lib/R; \
+    chown -R nonroot:nonroot "${R_LIBS_USER}"
+
+
+RUN mkdir -p /app /mnt/input /mnt/output "${R_LIBS_USER}" && \
+    chown -R nonroot:nonroot /app /mnt/input /mnt/output "${R_LIBS_USER}" /opt/venv && \
+    chmod -R u+rwX,g+rwX /app /opt/venv "${R_LIBS_USER}" && \
+    chmod -R a+rX /usr/lib/R /usr/share/R /usr/local/lib/R && \
+    ln -sf /usr/lib/R/lib/libR.so /usr/lib/libR.so
+
+COPY docker-entrypoint.sh /usr/local/bin/docker-entrypoint.sh
+RUN chmod 0755 /usr/local/bin/docker-entrypoint.sh
+
+USER nonroot
+
+ENTRYPOINT ["/usr/local/bin/docker-entrypoint.sh"]
+CMD ["python", "main.py"]

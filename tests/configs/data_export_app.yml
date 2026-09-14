@@ -1,0 +1,37 @@
+config:
+  hyperparams:
+  - default: 'report'
+    description: Name of the written report.
+    maxValue: null
+    minValue: null
+    name: report_name
+    type: STRING
+  input:
+  - delimiter: ','
+    description: Patient data export
+    hasHeader: true
+    maxValue: null
+    minValue: null
+    name: input
+    required: true
+    shape: null
+    tabularSchema: null
+    type: CSV
+  output:
+  - delimiter: null
+    description: Summary of the export
+    hasHeader: null
+    maxValue: null
+    minValue: null
+    name: report
+    required: false
+    shape: null
+    tabularSchema: null
+    type: TEXT
+info:
+  longDescription: null
+  name: ExportTestApp
+  shortDescription: Summarises a patient export
+  slug: exporttestapp
+  sourceUrl: null
+  type: EXPORT

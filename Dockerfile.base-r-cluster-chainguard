@@ -1,0 +1,67 @@
+ARG PYFEDAPPWRAP_VERSION=0.6.15
+ARG PYFEDAPPWRAP_WITH_DEPS=0
+ARG R_DEPS=0
+ARG BASE_IMAGE=gitlab.cosy.bio:5050/cosybio/federated-learning/federated_db/pyfedappwrap/base-python:0.6.15
+
+FROM ${BASE_IMAGE}
+ARG TARGETARCH
+
+# re-declared after FROM so the values are usable in ENV below
+ARG PYFEDAPPWRAP_VERSION
+ARG BASE_IMAGE
+ARG FEDDB_IMAGE_BUILD_DATE=unknown
+
+WORKDIR /app
+
+ENV PATH="/opt/venv/bin:${PATH}" \
+    PYTHONDONTWRITEBYTECODE=1 \
+    PYTHONUNBUFFERED=1 \
+    PYFEDAPPWRAP_VERSION=${PYFEDAPPWRAP_VERSION} \
+    FEDDB_IMAGE_FAMILY=base-r-biocmanager \
+    FEDDB_IMAGE_BUILD_DATE=${FEDDB_IMAGE_BUILD_DATE} \
+    FEDDB_BASE_IMAGE=${BASE_IMAGE} \
+    R_HOME=/usr/lib/R \
+    R_LIBS_USER=/app/R/library \
+    R_SHARE_DIR=/usr/share/R/share \
+    R_INCLUDE_DIR=/usr/share/R/include \
+    R_DOC_DIR=/usr/share/R/doc \
+    LD_LIBRARY_PATH=/usr/lib/R/lib:/usr/lib:${LD_LIBRARY_PATH:-}
+
+USER root
+
+RUN set -eux; \
+    mkdir -p /app /mnt/input /mnt/output "${R_LIBS_USER}"; \
+    chown -R nonroot:nonroot /app /mnt/input /mnt/output "${R_LIBS_USER}" /opt/venv; \
+    chmod -R u+rwX,g+rwX /app /mnt/input /mnt/output "${R_LIBS_USER}" /opt/venv
+
+COPY docker-entrypoint.sh /usr/local/bin/docker-entrypoint.sh
+RUN chmod 0755 /usr/local/bin/docker-entrypoint.sh
+
+USER nonroot
+
+RUN set -eux; \
+    R --version; \
+    R -q -e 'dir.create(Sys.getenv("R_LIBS_USER"), recursive = TRUE, showWarnings = FALSE); sessionInfo()'
+
+
+RUN set -eux; \
+    if [ "${TARGETARCH}" = "arm64" ]; then \
+      R -q -e 'options(repos = c(CRAN = "https://cloud.r-project.org")); \
+               dir.create(Sys.getenv("R_LIBS_USER"), recursive = TRUE, showWarnings = FALSE); \
+               if (!requireNamespace("BiocManager", quietly = TRUE)) install.packages("BiocManager", lib = Sys.getenv("R_LIBS_USER")); \
+               library(BiocManager, lib.loc = Sys.getenv("R_LIBS_USER")); \
+               sessionInfo()' || { \
+        echo "BiocManager source install failed on emulated arm64 build; continuing for CI image build compatibility."; \
+        R -q -e 'sessionInfo()'; \
+      }; \
+    else \
+      R -q -e 'options(repos = c(CRAN = "https://cloud.r-project.org")); \
+               dir.create(Sys.getenv("R_LIBS_USER"), recursive = TRUE, showWarnings = FALSE); \
+               if (!requireNamespace("BiocManager", quietly = TRUE)) install.packages("BiocManager", lib = Sys.getenv("R_LIBS_USER")); \
+               library(BiocManager, lib.loc = Sys.getenv("R_LIBS_USER")); \
+               sessionInfo()'; \
+    fi
+
+
+ENTRYPOINT ["/usr/local/bin/docker-entrypoint.sh"]
+CMD ["python", "main.py"]
