@@ -1,6 +1,7 @@
 [build-system]
-requires = ["setuptools", "setuptools-scm"]
+requires = ["setuptools>=77", "setuptools-scm"]
 build-backend = "setuptools.build_meta"
+
 [tool.setuptools.packages]
 find = { include = ["pyfedappwrap*"], exclude = ["data*", "__pycache__*", "test.py", "main.py"] }
 
@@ -8,21 +9,31 @@ find = { include = ["pyfedappwrap*"], exclude = ["data*", "__pycache__*", "test.
 "pyfedappwrap.engine.tests.federated" = ["*.yml"]
 
 [project]
+# Distribution name on PyPI; the import package stays `pyfedappwrap`
 name = "FL-Net-Python-Tool-API"
+# Maintainers only: do not change the version without permission, it triggers publishing and the Docker base images
 version = "0.7.12"
-description = "Wrapper for local FL-Net App development, !!DO NOT CHANGE VERSION WITHOUT PERMISSION!!!"
+description = "Python SDK and runtime for building FL-Net tools: local analyses, preprocessing, exports and federated learning apps"
 readme = "README.md"
 requires-python = ">=3.11"
-license = {text = "MIT"}
+license = "Apache-2.0"
+license-files = ["LICENSE"]
 authors = [
     {name = "Simon Süwer", email = "simon.suewer@uni-hamburg.de"},
 ]
 classifiers = [
-    "Programming Language :: Python :: 3",
-    "License :: OSI Approved :: MIT License",
+    "Development Status :: 4 - Beta",
+    "Intended Audience :: Developers",
+    "Intended Audience :: Science/Research",
     "Operating System :: OS Independent",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3 :: Only",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Topic :: Scientific/Engineering :: Artificial Intelligence",
+    "Topic :: Scientific/Engineering :: Medical Science Apps.",
 ]
-keywords = ["fl", "feddb", "python"]
+keywords = ["federated learning", "fl-net", "privacy", "smpc", "differential privacy", "sdk"]
 dependencies = [
     "websockets~=15.0.1",
     "pydantic-yaml==1.3.0",
@@ -33,11 +44,13 @@ dependencies = [
     "pydantic-settings~=2.6.0",
     "pydantic_yaml~=1.3.0",
     "requests~=2.32.3",
-     "numpy>=1.23.5,<3",
+    "numpy>=1.23.5,<3",
     "pandas>=1.5.3,<3",
     "validators~=0.35.0",
 ]
 
 [project.urls]
-"Homepage" = "https://github.com/FedLearnNet/Python-Tool-API"
-"Bug Tracker" = "https://github.com/FedLearnNet/Python-Tool-API/issues"
+Homepage = "https://github.com/FedLearnNet/Python-Tool-API"
+Documentation = "https://federated-learning.net/documentation/"
+Source = "https://github.com/FedLearnNet/Python-Tool-API"
+Issues = "https://github.com/FedLearnNet/Python-Tool-API/issues"

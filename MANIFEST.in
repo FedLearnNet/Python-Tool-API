@@ -1,3 +1,2 @@
-include *.md LICENSE.txt requirements.txt CHANGELOG
-recursive-include src *
+include *.md requirements.txt
 recursive-include pyfedappwrap/engine/tests/federated *.yml
