@@ -29,9 +29,9 @@ RUN python -m venv /opt/venv
 RUN set -eux; \
     PIP_INDEX="https://test.pypi.org/simple/"; \
     if [ "${PYFEDAPPWRAP_WITH_DEPS}" = "1" ] || [ "${PYFEDAPPWRAP_WITH_DEPS}" = "true" ]; then \
-      pip install --no-cache-dir --extra-index-url "${PIP_INDEX}" "pyfedappwrap==${PYFEDAPPWRAP_VERSION}"; \
+      pip install --no-cache-dir --extra-index-url "${PIP_INDEX}" "FL-Net-Python-Tool-API==${PYFEDAPPWRAP_VERSION}"; \
     else \
-      pip install --no-cache-dir -i "${PIP_INDEX}" "pyfedappwrap==${PYFEDAPPWRAP_VERSION}" --no-deps; \
+      pip install --no-cache-dir -i "${PIP_INDEX}" "FL-Net-Python-Tool-API==${PYFEDAPPWRAP_VERSION}" --no-deps; \
     fi
 
 

@@ -21,7 +21,7 @@ RUN python3 -m venv /opt/venv
 COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
-RUN pip install -i https://test.pypi.org/simple/ pyfedappwrap==0.6.11 --no-deps
+RUN pip install -i https://test.pypi.org/simple/ FL-Net-Python-Tool-API==0.6.11 --no-deps
 
 COPY docker-entrypoint.sh /usr/local/bin/docker-entrypoint.sh
 RUN chmod 0755 /usr/local/bin/docker-entrypoint.sh

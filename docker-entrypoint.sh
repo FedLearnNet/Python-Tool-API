@@ -104,7 +104,7 @@ banner() {
   log "pyfedappwrap    : $(python - <<'PY' 2>&1 || echo 'n/a'
 try:
     from importlib.metadata import version
-    print(version("pyfedappwrap"))
+    print(version("FL-Net-Python-Tool-API"))
 except Exception as exc:  # noqa: BLE001 - diagnostics only
     print(f"not installed ({exc})")
 PY

@@ -1,0 +1,91 @@
+name: Publish package
+
+# develop -> TestPyPI, main -> PyPI
+on:
+  push:
+    branches: [main, develop]
+    paths:
+      - "pyfedappwrap/**"
+      - "pyproject.toml"
+      - "MANIFEST.in"
+      - ".github/workflows/publish.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  build:
+    name: Build package
+    if: github.ref == 'refs/heads/main' || github.ref == 'refs/heads/develop'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v7.0.1
+        with:
+          persist-credentials: false
+
+      - uses: actions/setup-python@v7.0.0
+        with:
+          python-version: "3.11"
+
+      - name: Build sdist and wheel
+        run: |
+          python -m pip install --upgrade pip build
+          python -m build
+
+      - uses: actions/upload-artifact@v7.0.1
+        with:
+          name: dist
+          path: dist/
+          retention-days: 1
+
+  # Separate jobs so only the upload step gets the OIDC token.
+  # Trusted publishing: (Test)PyPI trusts this workflow and environment, no API token needed.
+  publish-testpypi:
+    name: Publish to TestPyPI
+    needs: build
+    if: github.ref == 'refs/heads/develop'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    environment:
+      name: testpypi
+      url: https://test.pypi.org/project/FL-Net-Python-Tool-API/
+    permissions:
+      id-token: write
+    steps:
+      - uses: actions/download-artifact@v8.0.1
+        with:
+          name: dist
+          path: dist/
+
+      # The version only changes when pyproject.toml is bumped; existing versions are skipped
+      - uses: pypa/gh-action-pypi-publish@v1.14.2
+        with:
+          repository-url: https://test.pypi.org/legacy/
+          skip-existing: true
+
+  publish-pypi:
+    name: Publish to PyPI
+    needs: build
+    if: github.ref == 'refs/heads/main'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    environment:
+      name: pypi
+      url: https://pypi.org/project/FL-Net-Python-Tool-API/
+    permissions:
+      id-token: write
+    steps:
+      - uses: actions/download-artifact@v8.0.1
+        with:
+          name: dist
+          path: dist/
+
+      - uses: pypa/gh-action-pypi-publish@v1.14.2
+        with:
+          skip-existing: true

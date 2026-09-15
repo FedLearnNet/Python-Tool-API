@@ -8,7 +8,7 @@ find = { include = ["pyfedappwrap*"], exclude = ["data*", "__pycache__*", "test.
 "pyfedappwrap.engine.tests.federated" = ["*.yml"]
 
 [project]
-name = "pyfedappwrap"
+name = "FL-Net-Python-Tool-API"
 version = "0.7.12"
 description = "Wrapper for local FL-Net App development, !!DO NOT CHANGE VERSION WITHOUT PERMISSION!!!"
 readme = "README.md"
@@ -39,5 +39,5 @@ dependencies = [
 ]
 
 [project.urls]
-"Homepage" = "https://gitlab.cosy.bio/cosybio/federated-learning/federated_db/pyfedappwrap"
-"Bug Tracker" = "https://gitlab.cosy.bio/cosybio/federated-learning/federated_db/pyfedappwrap/-/issues"
+"Homepage" = "https://github.com/FedLearnNet/Python-Tool-API"
+"Bug Tracker" = "https://github.com/FedLearnNet/Python-Tool-API/issues"

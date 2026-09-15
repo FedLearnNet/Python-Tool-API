@@ -1,0 +1,184 @@
+name: Docker base images
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "pyproject.toml"
+      - "Dockerfile.base-chainguard"
+      - "Dockerfile.base-r-chainguard"
+      - "Dockerfile.base-r-cluster-chainguard"
+      - "docker-entrypoint.sh"
+      - ".github/workflows/docker.yml"
+  workflow_dispatch:
+    inputs:
+      force:
+        description: Rebuild even if the images for this version already exist
+        type: boolean
+        default: false
+
+concurrency:
+  group: docker-base-images
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+  packages: write
+
+env:
+  REGISTRY: ghcr.io/fedlearnnet/python-tool-api
+  PYTHON_VERSION: "3.11"
+  IMAGES: base-python base-python-dep base-r base-r-dep base-r-biocmanager base-r-dep-biocmanager
+
+jobs:
+  prepare:
+    if: github.ref == 'refs/heads/main'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    outputs:
+      build: ${{ steps.check.outputs.build }}
+      version: ${{ steps.check.outputs.version }}
+      build_date: ${{ steps.check.outputs.build_date }}
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          sparse-checkout: pyproject.toml
+          sparse-checkout-cone-mode: false
+
+      - uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      # Images are versioned with pyfedappwrap: skip everything when this version is already published.
+      - name: Check whether this version needs images
+        id: check
+        env:
+          FORCE: ${{ inputs.force }}
+        run: |
+          version="$(python3 -c 'import tomllib; print(tomllib.load(open("pyproject.toml", "rb"))["project"]["version"])')"
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+          echo "build_date=$(date -u +%Y-%m-%dT%H:%M:%SZ)" >> "$GITHUB_OUTPUT"
+          if [ "$FORCE" != "true" ] && docker buildx imagetools inspect "$REGISTRY/base-r-dep-biocmanager:$version" > /dev/null 2>&1; then
+            echo "Images for pyfedappwrap $version already exist, nothing to build."
+            echo "build=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "build=true" >> "$GITHUB_OUTPUT"
+          fi
+
+      # The images install pyfedappwrap from TestPyPI, so the release has to be available first.
+      - name: Wait for the release on TestPyPI
+        if: steps.check.outputs.build == 'true'
+        env:
+          VERSION: ${{ steps.check.outputs.version }}
+        run: |
+          for attempt in $(seq 1 20); do
+            curl -sf "https://test.pypi.org/pypi/FL-Net-Python-Tool-API/$VERSION/json" > /dev/null && exit 0
+            echo "pyfedappwrap $VERSION is not on TestPyPI yet ($attempt/20)"
+            sleep 30
+          done
+          echo "::error::pyfedappwrap $VERSION is not published on TestPyPI"
+          exit 1
+
+  build:
+    needs: prepare
+    if: needs.prepare.outputs.build == 'true'
+    strategy:
+      matrix:
+        include:
+          - arch: amd64
+            runner: ubuntu-24.04
+          - arch: arm64
+            runner: ubuntu-24.04-arm
+    # Native runners per architecture: apk/R installs under QEMU emulation are many times slower.
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      # The images build on each other, so the whole chain is built locally on the default docker
+      # builder (later images use the earlier ones as BASE_IMAGE) and pushed once at the end.
+      - name: Build image chain
+        env:
+          VERSION: ${{ needs.prepare.outputs.version }}
+          BUILD_DATE: ${{ needs.prepare.outputs.build_date }}
+          ARCH: ${{ matrix.arch }}
+        run: |
+          ctx="$RUNNER_TEMP/docker-context"
+          mkdir -p "$ctx"
+          cp docker-entrypoint.sh "$ctx/"
+
+          build() { # <dockerfile> <image> [build args...]
+            local file="$1" image="$2"
+            shift 2
+            echo "::group::$image"
+            docker build \
+              --build-arg PYFEDAPPWRAP_VERSION="$VERSION" \
+              --build-arg PYTHON_VERSION="$PYTHON_VERSION" \
+              --build-arg FEDDB_IMAGE_BUILD_DATE="$BUILD_DATE" \
+              --label "org.opencontainers.image.source=$GITHUB_SERVER_URL/$GITHUB_REPOSITORY" \
+              --label "org.opencontainers.image.version=$VERSION" \
+              "$@" \
+              -f "$file" \
+              -t "$REGISTRY/$image:$VERSION-$ARCH" \
+              "$ctx"
+            echo "::endgroup::"
+          }
+
+          build Dockerfile.base-chainguard           base-python            --build-arg PYFEDAPPWRAP_WITH_DEPS=0
+          build Dockerfile.base-chainguard           base-python-dep        --build-arg PYFEDAPPWRAP_WITH_DEPS=1
+          build Dockerfile.base-r-chainguard         base-r                 --build-arg BASE_IMAGE="$REGISTRY/base-python:$VERSION-$ARCH"
+          build Dockerfile.base-r-chainguard         base-r-dep             --build-arg BASE_IMAGE="$REGISTRY/base-python-dep:$VERSION-$ARCH"
+          build Dockerfile.base-r-cluster-chainguard base-r-biocmanager     --build-arg BASE_IMAGE="$REGISTRY/base-r:$VERSION-$ARCH"
+          build Dockerfile.base-r-cluster-chainguard base-r-dep-biocmanager --build-arg BASE_IMAGE="$REGISTRY/base-r-dep:$VERSION-$ARCH"
+
+      - name: Push images
+        env:
+          VERSION: ${{ needs.prepare.outputs.version }}
+          ARCH: ${{ matrix.arch }}
+        run: |
+          for image in $IMAGES; do
+            docker push "$REGISTRY/$image:$VERSION-$ARCH"
+          done
+
+  manifest:
+    needs: [prepare, build]
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Create multi-arch tags
+        env:
+          VERSION: ${{ needs.prepare.outputs.version }}
+        run: |
+          for image in $IMAGES; do
+            docker buildx imagetools create \
+              -t "$REGISTRY/$image:$VERSION" \
+              -t "$REGISTRY/$image:latest" \
+              "$REGISTRY/$image:$VERSION-amd64" \
+              "$REGISTRY/$image:$VERSION-arm64"
+          done
+
+  # Vulnerability scan after every build (results under Security → Code scanning).
+  # Disabled for now, run the "Container scan" workflow manually instead. Uncomment to enable.
+  # scan:
+  #   needs: [prepare, manifest]
+  #   uses: ./.github/workflows/scan.yml
+  #   with:
+  #     tag: ${{ needs.prepare.outputs.version }}
+  #   permissions:
+  #     contents: read
+  #     packages: read
+  #     security-events: write
