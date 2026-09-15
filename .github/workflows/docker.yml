@@ -171,14 +171,13 @@ jobs:
               "$REGISTRY/$image:$VERSION-arm64"
           done
 
-  # Vulnerability scan after every build (results under Security → Code scanning).
-  # Disabled for now, run the "Container scan" workflow manually instead. Uncomment to enable.
-  # scan:
-  #   needs: [prepare, manifest]
-  #   uses: ./.github/workflows/scan.yml
-  #   with:
-  #     tag: ${{ needs.prepare.outputs.version }}
-  #   permissions:
-  #     contents: read
-  #     packages: read
-  #     security-events: write
+  # Vulnerability scan after every build (results under Security → Code scanning)
+  scan:
+    needs: [prepare, manifest]
+    uses: ./.github/workflows/scan.yml
+    with:
+      tag: ${{ needs.prepare.outputs.version }}
+    permissions:
+      contents: read
+      packages: read
+      security-events: write
