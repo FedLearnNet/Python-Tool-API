@@ -40,7 +40,7 @@ def test_self_learned_iris():
     assert exit_payload is None
 
 def test_data_base_adopter():
-    system_settings.config_settings_path = "tests/configs/data_base_preprocess.yml"
+    system_settings.config_settings_path = "tests/configs/data_base_adopter_app.yml"
     system_settings.enable_remote_result_saving = False
     engine = FedDBEngine(test_mode=True)
     engine.register(DatabaseAdopterTest())

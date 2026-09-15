@@ -1,4 +1,5 @@
 import os
+import shutil
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Optional, Any
@@ -21,7 +22,9 @@ class DatabaseAdopterTest(
     BaseExtractorAdopterAPP[MyAppConfig, MyAppInputConfig, OneCSVOuputConfig]):
 
     def run_adopter(self) -> OneCSVOuputConfig:
-        return OneCSVOuputConfig(output=Path("data/iris_adopter.csv"))
+        output = Path("data/iris_adopter.csv")
+        shutil.copyfile("data/iris.csv", output)
+        return OneCSVOuputConfig(output=output)
 
     def __init__(self):
         super().__init__()
@@ -32,14 +35,12 @@ class DatabaseAdopterTest(
 
 if __name__ == '__main__':
     os.chdir("../../")
-system_settings.data_dir = "data"
-system_settings.config_settings_path = "tests/configs/data_base_adopter_app.yml"
-system_settings.enable_remote_result_saving = False
-print(system_settings)
-engine = FedDBEngine(test_mode=True)
-engine.register(DatabaseAdopterTest())
-
-if __name__ == '__main__':
+    system_settings.data_dir = "data"
+    system_settings.config_settings_path = "tests/configs/data_base_adopter_app.yml"
+    system_settings.enable_remote_result_saving = False
+    print(system_settings)
+    engine = FedDBEngine(test_mode=True)
+    engine.register(DatabaseAdopterTest())
     engine.start()
     exit_payload: EngineResult | None = engine.wait_until_stop()
     assert exit_payload is None
