@@ -67,18 +67,18 @@ jobs:
             echo "build=true" >> "$GITHUB_OUTPUT"
           fi
 
-      # The images install pyfedappwrap from TestPyPI, so the release has to be available first.
-      - name: Wait for the release on TestPyPI
+      # The images install pyfedappwrap from PyPI (published from main by publish.yml), so the release has to be available first.
+      - name: Wait for the release on PyPI
         if: steps.check.outputs.build == 'true'
         env:
           VERSION: ${{ steps.check.outputs.version }}
         run: |
           for attempt in $(seq 1 20); do
-            curl -sf "https://test.pypi.org/pypi/FL-Net-Python-Tool-API/$VERSION/json" > /dev/null && exit 0
-            echo "pyfedappwrap $VERSION is not on TestPyPI yet ($attempt/20)"
+            curl -sf "https://pypi.org/pypi/FL-Net-Python-Tool-API/$VERSION/json" > /dev/null && exit 0
+            echo "pyfedappwrap $VERSION is not on PyPI yet ($attempt/20)"
             sleep 30
           done
-          echo "::error::pyfedappwrap $VERSION is not published on TestPyPI"
+          echo "::error::pyfedappwrap $VERSION is not published on PyPI"
           exit 1
 
   build:
