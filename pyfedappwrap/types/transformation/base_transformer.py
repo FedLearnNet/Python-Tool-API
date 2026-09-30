@@ -1,8 +1,7 @@
+import pandas as pd
 from abc import ABC, abstractmethod
 from pathlib import Path
 from typing import TypeVar, Generic, Union
-
-import pandas as pd
 
 from pyfedappwrap.learning.base_app import BaseApp
 from pyfedappwrap.types.transformation.transformer_config import BaseTransformerConfig, \
@@ -24,7 +23,6 @@ class BaseTransformerAPP(BaseApp[TConfig, TransformerInputConfig, TransformerOut
 
     def run_transformation(self, data: TransformerInputConfig) -> TransformerOutputConfig:
         self.logger.info("transformation started with the following data")
-        self.logger.info(data.input)
         if self.config.is_on_row():
             self.logger.info("transformation on row")
             dataframe = self.function_on_row(data.input)

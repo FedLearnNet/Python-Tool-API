@@ -12,7 +12,7 @@ find = { include = ["pyfedappwrap*"], exclude = ["data*", "__pycache__*", "test.
 # Distribution name on PyPI; the import package stays `pyfedappwrap`
 name = "FL-Net-Python-Tool-API"
 # Maintainers only: do not change the version without permission, it triggers publishing and the Docker base images
-version = "0.7.12"
+version = "0.7.13"
 description = "Python SDK and runtime for building FL-Net tools: local analyses, preprocessing, exports and federated learning apps"
 readme = "README.md"
 requires-python = ">=3.11"
