@@ -47,7 +47,6 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
-# PNG/JPEG output in the random image generator; without Pillow it writes PPM files
 images = ["Pillow"]
 test = ["pytest", "typing_extensions"]
 dev = ["FL-Net-Python-Tool-API[test,images]"]
