@@ -1,11 +1,10 @@
-import csv
-import io
 import logging
 import random
 import string
 from datetime import date, timedelta
 from typing import Any, Dict, List, Mapping, Optional
 
+from pyfedappwrap.engine.helper.value_helper import value_to_str
 from pyfedappwrap.generator.helper import (
     gen_matching_text,
     parse_float_or_default,
@@ -140,36 +139,5 @@ class DataTypeRandomGenerator:
         return random_text(self.rnd, min_len, max(min_len, max_len), string.ascii_lowercase)
 
 
-def validations_to_map(data_type: DataTypeTransformationGoalDTO) -> Dict[
-    DataTypeValidationType, str]:
-    return {v.name: v.validator for v in data_type.validations if v.validator is not None}
-
-
-def value_to_str(value: Any) -> str:
-    if isinstance(value, bool):
-        return "true" if value else "false"
-    return str(value)
-
-
-def create_list_of_dicts(data: Mapping[str, List[str]]) -> List[Dict[str, Optional[str]]]:
-    """Turn column lists ``{col: [v0, v1, ...]}`` into rows ``[{col: v0}, {col: v1}, ...]``."""
-    if not data:
-        return []
-    amount = len(next(iter(data.values())))
-    return [
-        {key: values[i] if i < len(values) else None for key, values in data.items()}
-        for i in range(amount)
-    ]
-
-
-def to_csv(data: List[Mapping[str, Any]]) -> str:
-    """Serialise rows to CSV using the first row's keys as header."""
-    if not data:
-        return ""
-    headers = list(data[0].keys())
-    buf = io.StringIO()
-    writer = csv.writer(buf, lineterminator="\n")
-    writer.writerow(headers)
-    for row in data:
-        writer.writerow(["" if row.get(h) is None else row.get(h) for h in headers])
-    return buf.getvalue()
+def validations_to_map(data_type: DataTypeTransformationGoalDTO) -> Dict[DataTypeValidationType, str]:
+    return {v.name: v.validator for v in data_type.validations}

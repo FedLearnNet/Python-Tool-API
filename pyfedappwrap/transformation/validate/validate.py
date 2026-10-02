@@ -6,6 +6,7 @@ import numpy as np
 import pandas as pd
 from pydantic import ValidationError
 
+from pyfedappwrap.engine.helper.value_helper import is_empty, validation_error_message, value_to_str
 from pyfedappwrap.transformation.validate.constants import ADAPTERS, APPLICABLE_TYPES, \
     LENGTH_ADAPTER
 from pyfedappwrap.transformation.validate.datatype_dto import (
@@ -47,7 +48,8 @@ def parse_rule(validation: DataTypeValidationDTO, data_type: DataTypes) -> Any:
         return normalize_value(validator,
                                DataTypes.FLOAT if data_type == DataTypes.INT else data_type)
     except (ValueError, re.error) as e:
-        raise ValueError(f"Invalid {name.value} validator {validator!r}: {_message(e)}") from None
+        raise ValueError(f"Invalid {name.value} validator {validator!r}: "
+                         f"{validation_error_message(e)}") from None
 
 
 def validate_value(value: Any, goal: DataTypeTransformationGoalDTO) -> None:
@@ -59,9 +61,7 @@ def validate_value(value: Any, goal: DataTypeTransformationGoalDTO) -> None:
         return
 
     if goal.options:
-        option = ("true" if value else "false") if isinstance(value, (bool, np.bool_)) else str(
-            value)
-        if option not in goal.options:
+        if value_to_str(value) not in goal.options:
             raise ValueError(f"Value {value!r} is not one of the allowed options {goal.options}")
         return
 
@@ -108,20 +108,8 @@ def normalize_value(value: Any, data_type: DataTypes) -> Any:
         normalized = ADAPTERS[data_type].validate_python(value)
     except ValidationError as e:
         raise ValueError(
-            f"Value {value!r} is not a valid {data_type.value}: {_message(e)}") from None
+            f"Value {value!r} is not a valid {data_type.value}: {validation_error_message(e)}") from None
     if isinstance(normalized, datetime):
         normalized = normalized.replace(tzinfo=timezone.utc) if normalized.tzinfo is None \
             else normalized.astimezone(timezone.utc)
     return normalized
-
-
-def is_empty(value: Any) -> bool:
-    if isinstance(value, str):
-        return value == ""
-    return pd.api.types.is_scalar(value) and pd.isna(value)
-
-
-def _message(error: Exception) -> str:
-    if isinstance(error, ValidationError):
-        return error.errors()[0]["msg"]
-    return str(error)

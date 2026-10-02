@@ -1,9 +1,10 @@
 import re
 from datetime import date, datetime
 
+import pandas as pd
 import pytest
 
-from pyfedappwrap.generator.datatype_generator import DataTypeRandomGenerator, create_list_of_dicts, to_csv
+from pyfedappwrap.generator.datatype_generator import DataTypeRandomGenerator
 from pyfedappwrap.transformation.validate.datatype_dto import DataTypeTransformationGoalDTO, DataTypes, \
     DataTypeValidationDTO, DataTypeValidationType
 
@@ -64,10 +65,11 @@ def test_seed_is_reproducible() -> None:
 
 def test_rows_long_format_and_csv() -> None:
     gen = DataTypeRandomGenerator(seed=1)
-    rows = create_list_of_dicts({
+    df = pd.DataFrame({
         "age": gen.generate_dummy_data(_dt(DataTypes.INT, min=18, max=99), 10),
         "note": ["a,b"] * 10,
     })
+    rows = df.to_dict("records")
     assert len(rows) == 10 and set(rows[0]) == {"age", "note"}
 
     long_rows = gen.wide_format_to_long_format(rows)
@@ -75,6 +77,6 @@ def test_rows_long_format_and_csv() -> None:
     assert {r["name"] for r in long_rows} == {"age", "note"}
     assert all(1 <= int(r["patientId"]) <= 2 for r in long_rows)
 
-    csv_text = to_csv(rows)
+    csv_text = df.to_csv(index=False)
     assert csv_text.splitlines()[0] == "age,note"
     assert '"a,b"' in csv_text
