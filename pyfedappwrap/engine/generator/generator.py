@@ -2,8 +2,6 @@ import logging
 import os
 import random
 import shutil
-import string
-import uuid
 from pathlib import Path
 from typing import Optional, Any
 
@@ -12,10 +10,12 @@ from pyfedappwrap.engine.config.config import ToolConfigDataType, \
 from pyfedappwrap.engine.config.config_handler import load_config
 from pyfedappwrap.engine.config.defaults import DEFAULT_TABULAR_SCHEMA
 from pyfedappwrap.engine.config.system_config import system_settings
-from pyfedappwrap.engine.generator.html_generator import generate_random_html
-from pyfedappwrap.engine.generator.image_generator import generate_random_image
-from pyfedappwrap.engine.generator.json_generator import generate_random_json
-from pyfedappwrap.engine.generator.table_generator import generate_random_csv_from_schema
+from pyfedappwrap.generator.helper import short_uuid4
+from pyfedappwrap.generator.html_generator import generate_random_html
+from pyfedappwrap.generator.image_generator import generate_random_image
+from pyfedappwrap.generator.json_generator import generate_random_json
+from pyfedappwrap.generator.table_generator import generate_random_csv_from_schema
+from pyfedappwrap.generator.text_generator import generate_random_text
 
 ROOT_DIR = Path(os.path.abspath(os.curdir))
 BASE_PATH = ROOT_DIR / system_settings.data_dir
@@ -103,7 +103,7 @@ class RandomTestGeneratorFactory:
             BASE_PATH.mkdir(parents=True, exist_ok=True)
             dest = BASE_PATH / Path(src).name
             if dest.exists():
-                dest = BASE_PATH / f"{Path(src).stem}_{_short_uuid4()}{Path(src).suffix}"
+                dest = BASE_PATH / f"{Path(src).stem}_{short_uuid4()}{Path(src).suffix}"
             shutil.copy2(src, dest)
             generator.generated_path = dest
             self.manged_generators[name] = generator
@@ -132,7 +132,7 @@ class RandomTestGenerator:
 
     def generate(self) -> Path:
         t = self.cfg.type
-        suffix = _short_uuid4()
+        suffix = short_uuid4()
 
         if t in (ToolConfigDataType.CSV, ToolConfigDataType.TSV):
             schema = self.cfg.tabularSchema
@@ -169,40 +169,3 @@ class RandomTestGenerator:
         self.generated_path = generate_random_text(out, seed=self.seed)
         return self.generated_path
 
-
-def generate_random_text(
-        out_path: Path,
-        *,
-        min_lines: int = 10,
-        max_lines: int = 50,
-        min_line_length: int = 5,
-        max_line_length: int = 80,
-        seed: Optional[int] = None,
-) -> Path:
-    """
-    Generates a random text-based test file for:
-      TEXT / STRING / MIXED / UNKNOWN
-
-    Each line is a random ASCII string.
-
-    Used for non-tabular validation pipelines.
-    """
-    rnd = random.Random(seed)
-
-    out_path.parent.mkdir(parents=True, exist_ok=True)
-
-    line_count = rnd.randint(min_lines, max_lines)
-
-    alphabet = string.ascii_letters + string.digits + " _-.:/@"
-
-    with out_path.open("w", encoding="utf-8") as f:
-        for _ in range(line_count):
-            ln = rnd.randint(min_line_length, max_line_length)
-            line = "".join(rnd.choice(alphabet) for _ in range(ln))
-            f.write(line.rstrip() + "\n")
-
-    return out_path
-
-
-def _short_uuid4() -> str:
-    return uuid.uuid4().hex[:8]

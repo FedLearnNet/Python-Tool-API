@@ -4,7 +4,9 @@ import json
 import random
 import string
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, Optional
+
+from pyfedappwrap.generator.helper import random_text
 
 
 def generate_random_json(
@@ -34,9 +36,7 @@ def generate_random_json(
         return "".join(rnd.choice(string.ascii_lowercase + string.digits + "_") for _ in range(n))
 
     def rand_str(min_len: int = 3, max_len: int = 40) -> str:
-        alphabet = string.ascii_letters + string.digits + " _-.:/@"
-        n = rnd.randint(min_len, max_len)
-        return "".join(rnd.choice(alphabet) for _ in range(n)).strip()
+        return random_text(rnd, min_len, max_len).strip()
 
     def rand_scalar() -> Any:
         t = rnd.choice(["str", "int", "float", "bool", "null"])

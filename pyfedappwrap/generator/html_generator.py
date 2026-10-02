@@ -3,6 +3,10 @@ import string
 from pathlib import Path
 from typing import Optional
 
+from pyfedappwrap.generator.helper import random_text
+
+_HTML_TEXT_ALPHABET = string.ascii_letters + string.digits + " _-.,:"
+
 
 def generate_random_html(
     out_path: Path,
@@ -22,9 +26,7 @@ def generate_random_html(
     out_path.parent.mkdir(parents=True, exist_ok=True)
 
     def rand_text(min_len=10, max_len=80) -> str:
-        alphabet = string.ascii_letters + string.digits + " _-.,:"
-        n = rnd.randint(min_len, max_len)
-        return "".join(rnd.choice(alphabet) for _ in range(n))
+        return random_text(rnd, min_len, max_len, _HTML_TEXT_ALPHABET)
 
     block_count = rnd.randint(min_blocks, max_blocks)
 

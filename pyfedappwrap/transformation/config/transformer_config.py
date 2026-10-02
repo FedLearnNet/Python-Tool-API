@@ -11,6 +11,10 @@ class BaseTransformerConfig(AppConfig):
     input_mapping: Optional[Dict[str, str]] = None
     return_mapping: Optional[Dict[str, str]] = None
     column: Optional[str] = None
+    patient_id_column: Optional[str] = None
+
+    def is_on_patient(self):
+        return self.patient_id_column is not None
 
     def is_on_row(self):
         return self.input_mapping is not None and self.return_mapping is not None and self.column is None

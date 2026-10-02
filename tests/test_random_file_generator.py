@@ -6,11 +6,11 @@ from pathlib import Path
 from pyfedappwrap.engine.config.config import NullValuePolicyDTO, \
     ColumnRuleDTO, TabularSchemaDTO, FederatedAppInputConfigDTO, ToolConfigDataType
 from pyfedappwrap.engine.config.system_config import system_settings
-from pyfedappwrap.engine.generator.generator import generate_random_text
-from pyfedappwrap.engine.generator.html_generator import generate_random_html
-from pyfedappwrap.engine.generator.image_generator import generate_random_image
-from pyfedappwrap.engine.generator.json_generator import generate_random_json
-from pyfedappwrap.engine.generator.table_generator import generate_random_csv_from_schema
+from pyfedappwrap.generator.html_generator import generate_random_html
+from pyfedappwrap.generator.image_generator import generate_random_image
+from pyfedappwrap.generator.json_generator import generate_random_json
+from pyfedappwrap.generator.table_generator import generate_random_csv_from_schema
+from pyfedappwrap.generator.text_generator import generate_random_text
 from pyfedappwrap.engine.validate.profiler import profile_table_from_path
 from pyfedappwrap.engine.validate.validate_table import validate_table_profile
 

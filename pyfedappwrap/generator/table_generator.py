@@ -1,9 +1,9 @@
 import random
-import re
 import string
 from pathlib import Path
 from typing import List, Optional
 
+from pyfedappwrap.generator.helper import fmt_float, gen_matching_text, looks_int, rand_safe_text
 from pyfedappwrap.engine.config.config import TabularSchemaDTO, ColumnRuleDTO
 
 _EXTRA_COL_TYPES = ("NUMBER", "TEXT", "INTEGER", "BOOLEAN")
@@ -153,7 +153,7 @@ def _gen_cell_value(
             if hi < lo:
                 hi = lo
             val = str(rnd.randint(int(lo), int(hi))) if (
-                    float(lo).is_integer() and float(hi).is_integer()) else _fmt_float(
+                    float(lo).is_integer() and float(hi).is_integer()) else fmt_float(
                 rnd.uniform(lo, hi))
         else:
             # generic numeric (prefer int to satisfy INTEGER-only profilers too)
@@ -175,10 +175,10 @@ def _gen_cell_value(
         # avoid zero-as-null if prohibitedZeroAsNull
         prohibit_zero = bool(getattr(policy, "prohibitedZeroAsNull", False))
         for _ in range(20):
-            if _looks_int(lo) and _looks_int(hi) and rnd.random() < 0.7:
+            if looks_int(lo) and looks_int(hi) and rnd.random() < 0.7:
                 val = str(rnd.randint(int(lo), int(hi)))
             else:
-                val = _fmt_float(rnd.uniform(lo, hi))
+                val = fmt_float(rnd.uniform(lo, hi))
             if prohibit_zero and val in ("0", "0.0", "0.00", "-0", "-0.0", "-0.00"):
                 continue
             return _sanitize_token(val, delimiter, prohibit_null_literals, null_literals, policy,
@@ -190,21 +190,9 @@ def _gen_cell_value(
 
     # regex
     if rule is not None and rule.regex:
-        v = _gen_from_regex_best_effort(rule.regex, rnd)
+        v = gen_matching_text(rule.regex, rnd, delimiter)
         if v is None:
-            # controlled brute force: generate safe tokens and match
-            try:
-                rx = re.compile(rule.regex)
-            except Exception:
-                rx = None
-            if rx is not None:
-                for _ in range(500):
-                    candidate = _rand_safe_text(rnd, 1, 24, delimiter)
-                    if rx.fullmatch(candidate):
-                        v = candidate
-                        break
-        if v is None:
-            v = _rand_safe_text(rnd, 6, 12, delimiter)
+            v = rand_safe_text(rnd, 6, 12, delimiter)
         return _sanitize_token(v, delimiter, prohibit_null_literals, null_literals, policy, rnd)
 
     # default extra column behavior: always non-empty if prohibited
@@ -247,28 +235,6 @@ def _sanitize_token(
     return s
 
 
-def _looks_int(x: float) -> bool:
-    try:
-        return float(x).is_integer()
-    except Exception:
-        return False
-
-
-def _fmt_float(x: float) -> str:
-    return f"{x:.6f}".rstrip("0").rstrip(".")
-
-
-def _rand_safe_text(rnd: random.Random, min_len: int, max_len: int, delimiter: str) -> str:
-    n = rnd.randint(min_len, max_len)
-    alphabet = string.ascii_letters + string.digits + "_-."
-    s = "".join(rnd.choice(alphabet) for _ in range(n))
-    # make sure delimiter/comma not present
-    s = s.replace(",", "_")
-    if delimiter:
-        s = s.replace(delimiter, "_")
-    return s
-
-
 def _gen_default_value(rnd: random.Random, delimiter: str) -> str:
     t = rnd.choice(_EXTRA_COL_TYPES)
     if t == "BOOLEAN":
@@ -276,36 +242,5 @@ def _gen_default_value(rnd: random.Random, delimiter: str) -> str:
     if t == "INTEGER":
         return str(rnd.randint(1, 1000))  # avoid empty and common null-ish tokens
     if t == "NUMBER":
-        return _fmt_float(rnd.uniform(0.001, 1000.0))
-    return _rand_safe_text(rnd, 3, 16, delimiter)
-
-
-def _gen_from_regex_best_effort(pattern: str, rnd: random.Random) -> Optional[str]:
-    p = pattern.strip()
-
-    # exact digits: ^\d{n}$ / ^[0-9]{n}$
-    m = re.fullmatch(r"^\^?(\\d|\[0-9\])\{(\d+)\}\$?$", p)
-    if m:
-        n = int(m.group(2))
-        return "".join(str(rnd.randint(0, 9)) for _ in range(n))
-
-    # digits plus: ^\d+$
-    if re.fullmatch(r"^\^?(\\d|\[0-9\])\+\$?$", p):
-        n = rnd.randint(1, 12)
-        return "".join(str(rnd.randint(0, 9)) for _ in range(n))
-
-    # common “no whitespace” email
-    if p in (r"^\S+@\S+\.\S+$", r"^\w+@\w+\.\w+$"):
-        user = _rand_safe_text(rnd, 3, 10, "")
-        dom = _rand_safe_text(rnd, 3, 8, "")
-        tld = rnd.choice(["com", "org", "net", "de"])
-        return f"{user}@{dom}.{tld}"
-
-    # ISO date
-    if p in (r"^\d{4}-\d{2}-\d{2}$", r"^[0-9]{4}-[0-9]{2}-[0-9]{2}$"):
-        year = rnd.randint(1990, 2030)
-        month = rnd.randint(1, 12)
-        day = rnd.randint(1, 28)
-        return f"{year:04d}-{month:02d}-{day:02d}"
-
-    return None
+        return fmt_float(rnd.uniform(0.001, 1000.0))
+    return rand_safe_text(rnd, 3, 16, delimiter)
