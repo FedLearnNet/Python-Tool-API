@@ -2,8 +2,8 @@ import csv
 import io
 import logging
 import random
-import re
 import string
+from datetime import date, timedelta
 from typing import Any, Dict, List, Mapping, Optional
 
 from pyfedappwrap.generator.helper import (
@@ -16,11 +16,12 @@ from pyfedappwrap.generator.helper import (
     random_int,
     random_text,
 )
-from pyfedappwrap.transformation.datatype_dto import (
+from pyfedappwrap.transformation.validate.datatype_dto import (
     DataTypes,
     DataTypeTransformationGoalDTO,
     DataTypeValidationType,
 )
+from pyfedappwrap.transformation.validate.validate import is_valid_value, normalize_value, validate
 
 V = DataTypeValidationType
 
@@ -30,13 +31,26 @@ class DataTypeRandomGenerator:
     def __init__(self, seed: Optional[int] = None):
         self.rnd = random.Random(seed)
 
+    def generate_data(
+            self,
+            source_goals: Dict[str, DataTypeTransformationGoalDTO],
+            amount: int = 10,
+    ) -> Dict[str, List[str]]:
+        data: Dict[str, List[str]] = {}
+        for col_name, goal in source_goals.items():
+            try:
+                data[col_name] = self.generate_dummy_data(goal, amount)
+            except ValueError as e:
+                raise ValueError(f"Invalid goal for column '{col_name}': {e}") from e
+        return data
+
     def generate_dummy_data(
             self,
             data_type: DataTypeTransformationGoalDTO,
             amount: int,
             max_attempts: int = 10,
     ) -> List[str]:
-        """Generate ``amount`` values, regenerating up to ``max_attempts`` times until one validates."""
+        validate(data_type)
         generated: List[str] = []
         for _ in range(amount):
             value = self.generate_random_value(data_type)
@@ -76,10 +90,10 @@ class DataTypeRandomGenerator:
             min_len = parse_int_or_default(validations.get(V.MINLENGTH), 1)
             max_len = parse_int_or_default(validations.get(V.MAXLENGTH), min_len + 10)
             return self._random_lowercase(min_len, max_len)
-        if t == DataTypes.DATE:
-            return random_date(self.rnd).isoformat()
-        if t == DataTypes.DATE_TIME:
-            return random_datetime(self.rnd).isoformat()
+        if t in (DataTypes.DATE, DataTypes.DATE_TIME):
+            if V.MIN in validations or V.MAX in validations:
+                return self._random_between(validations, t).isoformat()
+            return (random_date if t == DataTypes.DATE else random_datetime)(self.rnd).isoformat()
         if t == DataTypes.CATEGORICAL:
             return self._random_lowercase(3, 8)
         if t == DataTypes.FILE:
@@ -112,6 +126,16 @@ class DataTypeRandomGenerator:
 
         return long_rows
 
+    def _random_between(self, validations: Dict[DataTypeValidationType, str], t: DataTypes) -> date:
+        """Random date/datetime within MIN/MAX; a missing bound lies ten years from the given one."""
+        span = timedelta(days=3650)
+        lo = normalize_value(validations.get(V.MIN), t)
+        hi = normalize_value(validations.get(V.MAX), t)
+        lo = lo or hi - span
+        hi = hi or lo + span
+        # adding a timedelta to a date only adds its whole days
+        return lo + timedelta(seconds=random_int(self.rnd, 0, int((hi - lo).total_seconds())))
+
     def _random_lowercase(self, min_len: int, max_len: int) -> str:
         return random_text(self.rnd, min_len, max(min_len, max_len), string.ascii_lowercase)
 
@@ -119,41 +143,6 @@ class DataTypeRandomGenerator:
 def validations_to_map(data_type: DataTypeTransformationGoalDTO) -> Dict[
     DataTypeValidationType, str]:
     return {v.name: v.validator for v in data_type.validations if v.validator is not None}
-
-
-def is_valid_value(value: Any, data_type: DataTypeTransformationGoalDTO) -> bool:
-    """Check a generated value against the options and MIN/MAX/MINLENGTH/MAXLENGTH/PATTERN validations."""
-    if data_type.options:
-        return value in data_type.options
-
-    validations = validations_to_map(data_type)
-
-    if data_type.type in (DataTypes.INT, DataTypes.FLOAT):
-        lo = validations.get(V.MIN)
-        hi = validations.get(V.MAX)
-        if lo is not None and value < parse_float_or_default(lo, float("-inf")):
-            return False
-        if hi is not None and value > parse_float_or_default(hi, float("inf")):
-            return False
-        return True
-
-    if data_type.type == DataTypes.STRING:
-        s = str(value)
-        min_len = validations.get(V.MINLENGTH)
-        max_len = validations.get(V.MAXLENGTH)
-        if min_len is not None and len(s) < parse_int_or_default(min_len, 0):
-            return False
-        if max_len is not None and len(s) > parse_int_or_default(max_len, len(s)):
-            return False
-        pattern = validations.get(V.PATTERN)
-        if pattern:
-            try:
-                return re.fullmatch(pattern, s) is not None
-            except re.error:
-                return True
-        return True
-
-    return True
 
 
 def value_to_str(value: Any) -> str:

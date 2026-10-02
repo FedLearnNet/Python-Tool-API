@@ -4,7 +4,7 @@ from datetime import date, datetime
 import pytest
 
 from pyfedappwrap.generator.datatype_generator import DataTypeRandomGenerator, create_list_of_dicts, to_csv
-from pyfedappwrap.transformation.datatype_dto import DataTypeTransformationGoalDTO, DataTypes, \
+from pyfedappwrap.transformation.validate.datatype_dto import DataTypeTransformationGoalDTO, DataTypes, \
     DataTypeValidationDTO, DataTypeValidationType
 
 
