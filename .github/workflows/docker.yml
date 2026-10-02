@@ -5,10 +5,10 @@ on:
     branches: [main]
     paths:
       - "pyproject.toml"
-      - "Dockerfile.base-chainguard"
-      - "Dockerfile.base-r-chainguard"
-      - "Dockerfile.base-r-cluster-chainguard"
-      - "docker-entrypoint.sh"
+      - "docker/Dockerfile.base-chainguard"
+      - "docker/Dockerfile.base-r-chainguard"
+      - "docker/Dockerfile.base-r-cluster-chainguard"
+      - "docker/docker-entrypoint.sh"
       - ".github/workflows/docker.yml"
   workflow_dispatch:
     inputs:
@@ -113,7 +113,7 @@ jobs:
         run: |
           ctx="$RUNNER_TEMP/docker-context"
           mkdir -p "$ctx"
-          cp docker-entrypoint.sh "$ctx/"
+          cp docker/docker-entrypoint.sh "$ctx/"
 
           build() { # <dockerfile> <image> [build args...]
             local file="$1" image="$2"
@@ -132,12 +132,12 @@ jobs:
             echo "::endgroup::"
           }
 
-          build Dockerfile.base-chainguard           base-python            --build-arg PYFEDAPPWRAP_WITH_DEPS=0
-          build Dockerfile.base-chainguard           base-python-dep        --build-arg PYFEDAPPWRAP_WITH_DEPS=1
-          build Dockerfile.base-r-chainguard         base-r                 --build-arg BASE_IMAGE="$REGISTRY/base-python:$VERSION-$ARCH"
-          build Dockerfile.base-r-chainguard         base-r-dep             --build-arg BASE_IMAGE="$REGISTRY/base-python-dep:$VERSION-$ARCH"
-          build Dockerfile.base-r-cluster-chainguard base-r-biocmanager     --build-arg BASE_IMAGE="$REGISTRY/base-r:$VERSION-$ARCH"
-          build Dockerfile.base-r-cluster-chainguard base-r-dep-biocmanager --build-arg BASE_IMAGE="$REGISTRY/base-r-dep:$VERSION-$ARCH"
+          build docker/Dockerfile.base-chainguard           base-python            --build-arg PYFEDAPPWRAP_WITH_DEPS=0
+          build docker/Dockerfile.base-chainguard           base-python-dep        --build-arg PYFEDAPPWRAP_WITH_DEPS=1
+          build docker/Dockerfile.base-r-chainguard         base-r                 --build-arg BASE_IMAGE="$REGISTRY/base-python:$VERSION-$ARCH"
+          build docker/Dockerfile.base-r-chainguard         base-r-dep             --build-arg BASE_IMAGE="$REGISTRY/base-python-dep:$VERSION-$ARCH"
+          build docker/Dockerfile.base-r-cluster-chainguard base-r-biocmanager     --build-arg BASE_IMAGE="$REGISTRY/base-r:$VERSION-$ARCH"
+          build docker/Dockerfile.base-r-cluster-chainguard base-r-dep-biocmanager --build-arg BASE_IMAGE="$REGISTRY/base-r-dep:$VERSION-$ARCH"
 
       - name: Push images
         env:

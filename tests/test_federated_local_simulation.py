@@ -36,7 +36,7 @@ class FakeFederatedWsClient:
 
 
 def test_local_federated_runner_simulates_threaded_learning(tmp_path: Path):
-    system_settings.config_settings_path = "app_federated.yml"
+    system_settings.config_settings_path = "tests/configs/federated_app.yml"
     aggregator_dir = tmp_path / "aggregator"
     client1_dir = tmp_path / "client1"
     client2_dir = tmp_path / "client2"
@@ -90,7 +90,7 @@ def test_local_federated_runner_simulates_threaded_learning(tmp_path: Path):
 
 
 def test_local_federated_runner_supports_filename_hyperparams(tmp_path: Path):
-    system_settings.config_settings_path = "app_federated.yml"
+    system_settings.config_settings_path = "tests/configs/federated_app.yml"
     aggregator_dir = tmp_path / "aggregator"
     client1_dir = tmp_path / "client1"
     client2_dir = tmp_path / "client2"
@@ -155,7 +155,7 @@ def test_local_federated_runner_supports_filename_hyperparams(tmp_path: Path):
 
 
 def test_local_federated_runner_ignores_non_numeric_columns_in_client_input(tmp_path: Path):
-    system_settings.config_settings_path = "app_federated.yml"
+    system_settings.config_settings_path = "tests/configs/federated_app.yml"
     aggregator_dir = tmp_path / "aggregator"
     client1_dir = tmp_path / "client1"
     client2_dir = tmp_path / "client2"
@@ -212,7 +212,7 @@ def test_local_federated_runner_ignores_non_numeric_columns_in_client_input(tmp_
 
 
 def test_local_federated_runner_executes_client_app_workflow_and_reports_round_messages(tmp_path: Path):
-    system_settings.config_settings_path = "app_federated.yml"
+    system_settings.config_settings_path = "tests/configs/federated_app.yml"
     system_settings.enable_remote_result_saving = False
     aggregator_dir = tmp_path / "aggregator"
     client1_dir = tmp_path / "client1"
@@ -279,7 +279,7 @@ def test_local_federated_runner_executes_client_app_workflow_and_reports_round_m
 
 
 def test_local_federated_runner_can_skip_local_aggregator_start(tmp_path: Path):
-    system_settings.config_settings_path = "app_federated.yml"
+    system_settings.config_settings_path = "tests/configs/federated_app.yml"
     aggregator_dir = tmp_path / "aggregator"
     _prepare_participant_dir(aggregator_dir)
 

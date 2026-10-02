@@ -18,7 +18,25 @@ Part of FL-Net, the federated learning platform also behind PosyMed.
 
 All documentation can be found on the FL-Net documentation site:
 - [FL-Net documentation](https://federated-learning.net/documentation/)
+- [Federated runtime](https://federated-learning.net/documentation/docs/contribution-guide/python-tool-api/federated-runtime): how the engine runs a federated run internally
 
+
+## Development
+
+```bash
+pip install -e ".[dev]"
+pytest
+```
+
+| Folder | Content |
+|---|---|
+| `pyfedappwrap/` | The package |
+| `tests/` | Test suite, with test apps in `tests/apps/`, configs in `tests/configs/` and input data in `tests/data/` |
+| `examples/` | Example apps for tool authors |
+| `scripts/` | Local dev runners, started from the repository root (`python -m scripts.run_local`) |
+| `docker/` | Base image Dockerfiles, built by `.github/workflows/docker.yml` |
+
+Local settings go into `.env` (template: `.env.example`).
 
 
 ## License

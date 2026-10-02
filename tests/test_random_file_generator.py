@@ -137,7 +137,8 @@ def test_generate_random_image_file_png() -> None:
         assert produced.exists()
         assert produced.stat().st_size > 0
         raw = produced.read_bytes()
-        assert raw.startswith(b"P6\n")
+        # PNG with Pillow installed, PPM fallback without
+        assert raw.startswith((b"\x89PNG", b"P6\n"))
         _cleanup(produced)
     finally:
         _cleanup(out)

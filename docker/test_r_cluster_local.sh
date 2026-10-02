@@ -1,7 +1,7 @@
 #!/usr/bin/env sh
 set -eu
 
-ROOT_DIR="$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)"
+DOCKER_DIR="$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)"
 
 BASE_IMAGE="gitlab.cosy.bio:5050/cosybio/federated-learning/federated_db/pyfedappwrap/base-r-dep:latest"
 PLATFORM="linux/arm64/v8"
@@ -25,9 +25,9 @@ docker buildx build \
   --progress=plain \
   --platform linux/amd64,linux/arm64/v8 \
   --provenance false \
-  -f "${ROOT_DIR}/Dockerfile.base-r-cluster-chainguard" \
+  -f "${DOCKER_DIR}/Dockerfile.base-r-cluster-chainguard" \
   --build-arg BASE_IMAGE="${BASE_IMAGE}" \
   -t "${IMAGE_TAG}" \
-  "${ROOT_DIR}"
+  "${DOCKER_DIR}"
 
 echo "Done. Local test build completed."

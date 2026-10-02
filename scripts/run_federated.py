@@ -1,9 +1,10 @@
+"""Runs the federated mean demo with a dockerized controller. Start from the repository root: python -m scripts.run_federated"""
 from pyfedappwrap.engine.config.system_config import system_settings
 from pyfedappwrap.engine.runtime import FedDBEngine
 from tests.apps.federated_aggregator import MeanVectorAggregator
 from tests.apps.federated_client import FederatedMeanClientApp
 
-system_settings.config_settings_path = "app_federated.yml"
+system_settings.config_settings_path = "tests/configs/federated_app.yml"
 system_settings.fl_test.use_dockerized_controller = True
 print(system_settings)
 
