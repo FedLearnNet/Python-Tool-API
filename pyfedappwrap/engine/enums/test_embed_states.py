@@ -2,7 +2,7 @@ from enum import Enum
 from typing import Any
 
 
-class TestEmbedEnum(Enum):
+class WebsocketMessageTypes(Enum):
     CLIENT_STARTED = "CLIENT_STARTED"
     CONFIG_CHANGED = "CONFIG_CHANGED"
     CONFIG_INITIAL_SEND = "CONFIG_INITIAL_SEND"
@@ -32,6 +32,9 @@ class TestEmbedEnum(Enum):
     SEND_MODEL = "SEND_MODEL"
     SERVER_ERROR = "SERVER_ERROR"
     CLIENT_STOPPED = "CLIENT_STOPPED"
+
+    TRANSFORMATION_CHECK = "TRANSFORMATION_CHECK"
+    TRANSFORMATION_CHECK_RESULT = "TRANSFORMATION_CHECK_RESULT"
 
 
 

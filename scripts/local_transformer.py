@@ -2,8 +2,8 @@ from typing import Any
 
 from pydantic.dataclasses import dataclass
 
-from pyfedappwrap.types.transformation.base_transformer import BaseTransformerAPP
-from pyfedappwrap.types.transformation.transformer_config import BaseTransformerConfig
+from pyfedappwrap.transformation.base_transformer import BaseTransformerAPP
+from pyfedappwrap.transformation.config.transformer_config import BaseTransformerConfig
 
 
 @dataclass

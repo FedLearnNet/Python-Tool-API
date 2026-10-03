@@ -8,7 +8,7 @@ import numpy as np
 import pytest
 
 from pyfedappwrap.engine.config.system_config import system_settings
-from pyfedappwrap.engine.enums.test_embed_states import TestEmbedEnum as EmbedEventType
+from pyfedappwrap.engine.enums.test_embed_states import WebsocketMessageTypes as EmbedEventType
 from pyfedappwrap.engine.enums.test_embed_states import RunType
 from pyfedappwrap.engine.federated import (
     AppAggregator,

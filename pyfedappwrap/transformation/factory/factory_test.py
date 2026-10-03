@@ -7,11 +7,11 @@ from pyfedappwrap.transformation.base_transformer import BaseTransformerAPP
 from pyfedappwrap.transformation.validate.datatype_dto import DataTypeTransformationGoalDTO, DataTypes
 from pyfedappwrap.transformation.factory.factory_builder import TransformationBuilder
 from pyfedappwrap.transformation.factory.factory_test_result import \
-    TransformationFactoryTestResultDTO
+    TransformationFactoryTestResultDTO, TransformationSampleDTO
 from pyfedappwrap.transformation.transformation_mode import FunctionExecutionMode
 from pyfedappwrap.transformation.validate.validate import normalize_value, validate, validate_value
 
-MAX_REPORTED_ERRORS = 5
+MAX_SAMPLES = 20
 
 
 class TransformationTester:
@@ -22,7 +22,7 @@ class TransformationTester:
     none is given, ``amount`` random rows generated from ``source_goals``. The columns are the
     parameters of the transformation. How ``transform`` is called depends on ``mode``:
       - ROW: once per row with a dict {parameter: value};
-      - CELL: once per value of the single column;
+      - CELL: once per value of every column;
       - PATIENT: once with all rows, as if they belonged to one patient.
     A result may be a value or a dict holding exactly one value.
 
@@ -59,7 +59,8 @@ class TransformationTester:
             return self._fail(str(e))
 
         try:
-            transformer = TransformationBuilder(source_code, self.mode).build()
+            builder = TransformationBuilder(source_code, self.mode)
+            transformer = builder.build()
         except ValueError as e:
             return self._fail(f"Building the transformation failed, {e}")
 
@@ -68,14 +69,13 @@ class TransformationTester:
         except Exception as e:
             return self._fail(f"Transformation failed, {type(e).__name__}: {e}")
 
-        errors = self._check_results(results)
-        if errors:
-            shown = "; ".join(errors[:MAX_REPORTED_ERRORS])
-            more = f" (and {len(errors) - MAX_REPORTED_ERRORS} more)" if len(errors) > MAX_REPORTED_ERRORS else ""
-            return self._fail(f"{len(errors)} of {len(results)} results do not match the goal: {shown}{more}")
-
+        samples = self._check_results(results)
+        failed = sum(sample.error is not None for sample in samples)
+        message = (f"{failed} of {len(samples)} results do not match the goal" if failed
+                   else f"Test successful, {len(samples)} results match the goal")
         return TransformationFactoryTestResultDTO(
-            is_success=True, message=f"Test successful, {len(results)} results match the goal")
+            is_success=not failed, message=message, input_keys=builder.input_keys, return_keys=builder.return_keys,
+            samples=sorted(samples, key=lambda sample: sample.error is None)[:MAX_SAMPLES])
 
     def _generate_data(self) -> Optional[dict[str, object]]:
         if self.source_goals is None:
@@ -84,12 +84,10 @@ class TransformationTester:
         return {col: [self._typed(v, self.source_goals[col]) for v in values]
                 for col, values in generated.items()}
 
-    def _run(self, transformer: BaseTransformerAPP, rows: list[dict[str, Any]]) -> list[Any]:
+    def _run(self, transformer: BaseTransformerAPP, rows: list[dict[str, Any]]) -> list[tuple[Any, Any]]:
+        """Pairs of the input ``transform`` got and the result it returned."""
         if self.mode == FunctionExecutionMode.CELL:
-            columns = list(rows[0].keys()) if rows else []
-            if len(columns) != 1:
-                raise ValueError(f"CELL transformations take exactly one column, got {columns}")
-            return [transformer.transform(row[columns[0]]) for row in rows]
+            return [(value, transformer.transform(value)) for row in rows for value in row.values()]
         if self.mode == FunctionExecutionMode.PATIENT:
             result = transformer.transform(rows)
             results = result[0] if isinstance(result, tuple) else result
@@ -98,17 +96,18 @@ class TransformationTester:
             if len(results) > len(rows):
                 raise ValueError("transform must not return more results than the patient has rows")
             # a None result leaves the row untouched, so there is nothing to check
-            return [r for r in results if r is not None]
-        return [transformer.transform(row) for row in rows]
+            return [(rows[i] if i < len(rows) else None, r) for i, r in enumerate(results) if r is not None]
+        return [(row, transformer.transform(row)) for row in rows]
 
-    def _check_results(self, results: list[Any]) -> list[str]:
-        errors = []
-        for i, result in enumerate(results):
+    def _check_results(self, results: list[tuple[Any, Any]]) -> list[TransformationSampleDTO]:
+        samples = []
+        for value, result in results:
             try:
                 validate_value(self._single_value(result), self.goal)
+                samples.append(TransformationSampleDTO(input=value, output=result))
             except ValueError as e:
-                errors.append(f"result {i} ({result!r}): {e}")
-        return errors
+                samples.append(TransformationSampleDTO(input=value, output=result, error=str(e)))
+        return samples
 
     @staticmethod
     def _to_rows(data: dict[str, object]) -> list[dict[str, Any]]:

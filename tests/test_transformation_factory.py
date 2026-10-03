@@ -40,7 +40,8 @@ def test_build_requires_exactly_one_transformer() -> None:
     ("", "must not be empty"),
     ("  \n", "must not be empty"),
     ("class (", "does not compile, line 1"),
-    ("import not_a_module_xyz", "Executing the source code failed, ModuleNotFoundError"),
+    ("import not_a_module_xyz", "'not_a_module_xyz' is not installed"),
+    ("raise RuntimeError('x')", "Executing the source code failed, RuntimeError"),
     (HEADER + "class Missing(BaseTransformerAPP[BaseTransformerConfig]):\n    pass\n", "found: none"),
 ])
 def test_invalid_source_is_rejected(source, error) -> None:
@@ -175,3 +176,38 @@ def test_tester_checks_several_sources_against_one_goal() -> None:
     assert tester.test(ROW_SUM).is_success
     assert not tester.test(ROW_SUM.replace('data["a"] + data["b"]', 'data["a"] + data["b"] + 100')).is_success
     assert tester.test(ROW_SUM, data={"a": 1, "b": 2}).is_success
+
+
+@pytest.mark.parametrize("body,error", [
+    ("import os\nreturn value", "Line 4: importing 'os' is not allowed"),
+    ("from subprocess import run\nreturn value", "importing 'subprocess' is not allowed"),
+    ("from . import x\nreturn value", "importing '' is not allowed"),
+    ("return open(value)", "Line 4: using 'open' is not allowed"),
+    ("return value.__class__", "using '__class__' is not allowed"),
+    ("return (", "Source code does not compile, line 4"),
+])
+def test_static_check_rejects_unsafe_body(body, error) -> None:
+    with pytest.raises(ValueError, match=re.escape(error)):
+        TransformationBuilder(TransformationBuilder.wrap_body(body, CELL), CELL)
+
+
+def test_wrapped_body_reports_keys() -> None:
+    body = 'import math\nreturn {"bmi": math.floor(row["weight"] / row["height"] ** 2)}'
+    builder = TransformationBuilder(TransformationBuilder.wrap_body(body, ROW), ROW)
+    assert (builder.input_keys, builder.return_keys) == (["weight", "height"], ["bmi"])
+    assert builder.build().transform({"weight": 80, "height": 2}) == {"bmi": 20}
+    result = TransformationTester(_dt(DataTypes.INT), mode=ROW).test(builder.source_code, {"weight": [80], "height": [2]})
+    assert result.model_dump(by_alias=True) == {"isSuccess": True, "message": result.message,
+                                                "inputKeys": ["weight", "height"], "returnKeys": ["bmi"],
+                                                "samples": [{"input": {"weight": 80, "height": 2}, "output": {"bmi": 20},
+                                                             "error": None}]}
+
+
+def test_cell_checks_every_column_and_rules_without_message() -> None:
+    goal = DataTypeTransformationGoalDTO(type=DataTypes.INT, validations=[{"name": "MAX", "validator": "10"}])
+    upper = TransformationBuilder.wrap_body("return int(value) * 2", CELL)
+    assert TransformationTester(goal, mode=CELL).test(upper, {"a": ["1", "2"], "b": ["3", "4"]}).is_success
+    result = TransformationTester(goal, mode=CELL).test(upper, {"a": ["1"], "b": ["6"]})
+    assert result.message == "1 of 2 results do not match the goal"
+    assert [s.model_dump() for s in result.samples] == [{"input": "6", "output": 12, "error": "Must be at most 10"},
+                                                       {"input": "1", "output": 2, "error": None}]

@@ -1,5 +1,8 @@
+import ast
+import importlib.util
 import inspect
 import logging
+import textwrap
 import types
 from pathlib import Path
 from typing import Any, Optional, Union, get_type_hints
@@ -8,6 +11,7 @@ from pydantic import TypeAdapter, ValidationError
 from pydantic.alias_generators import to_snake
 
 from pyfedappwrap.transformation.base_transformer import BaseTransformerAPP
+from pyfedappwrap.transformation.config.function_analyzer import TransformFunctionAnalyzer
 from pyfedappwrap.transformation.config.transformer_config import BaseTransformerConfig
 from pyfedappwrap.transformation.transformation_mode import FunctionExecutionMode
 
@@ -16,6 +20,17 @@ _MODE_INPUT = {
     FunctionExecutionMode.PATIENT: ([], "a list of row dicts"),
     FunctionExecutionMode.CELL: ("1", "a single value"),
 }
+_HEADERS = {
+    FunctionExecutionMode.ROW: "def transform(self, row: dict):",
+    FunctionExecutionMode.PATIENT: "def transform(self, rows: list[dict]):",
+    FunctionExecutionMode.CELL: "def transform(self, value):",
+}
+_TEMPLATE = ("from pyfedappwrap.transformation.base_transformer import BaseTransformerAPP\n"
+             "class CodeTransformer(BaseTransformerAPP):\n"
+             "    {header}\n"
+             "{body}\n")
+_BLOCKED_MODULES = {"os", "sys", "subprocess", "socket", "shutil", "importlib", "ctypes"}
+_BLOCKED_NAMES = {"exec", "eval", "open", "compile", "__import__"}
 
 
 class TransformationBuilder:
@@ -27,6 +42,9 @@ class TransformationBuilder:
 
     With a ``mode``, ``transform`` must also take what that mode passes it: ROW a dict,
     PATIENT a list of row dicts, CELL a single value. A missing type hint is not checked.
+
+    Before executing, the source is checked statically: only installed libraries outside a
+    blocked list may be imported, and blocked builtins and dunder attributes are rejected.
 
     WARNING: loading executes arbitrary code in the current process, only use it inside the
     sandboxed tool container.
@@ -41,8 +59,15 @@ class TransformationBuilder:
             raise ValueError("Source code must not be empty")
         self.source_code = source_code
         self.mode = mode
-        self.transformer_class = self._load_transformer_class()
+        tree = self._check_source()
+        self.transformer_class = self._load_transformer_class(tree)
         self.module_name = to_snake(self.transformer_class.__name__)
+        self.input_keys, self.return_keys = self._keys(tree)
+
+    @staticmethod
+    def wrap_body(body: str, mode: FunctionExecutionMode) -> str:
+        """The source of a transformation whose ``transform`` has ``body``, its code starts at line 4."""
+        return _TEMPLATE.format(header=_HEADERS[mode], body=textwrap.indent(textwrap.dedent(body), " " * 8))
 
     def build(self, config: Optional[BaseTransformerConfig] = None) -> BaseTransformerAPP:
         cls = self.transformer_class
@@ -64,13 +89,29 @@ class TransformationBuilder:
     def register(self, path: Path) -> None:
         """Registers the saved transformation in main.py for a later build. Not implemented yet."""
 
-    def _load_transformer_class(self) -> type[BaseTransformerAPP]:
-        module = types.ModuleType("pyfedappwrap_transformation_source")
+    def _check_source(self) -> ast.Module:
         try:
-            exec(compile(self.source_code, "<transformation>", "exec"),
-                 module.__dict__)  # pylint: disable=exec-used
+            tree = ast.parse(self.source_code)
         except SyntaxError as e:
             raise ValueError(f"Source code does not compile, line {e.lineno}: {e.msg}") from e
+        for node in ast.walk(tree):
+            if isinstance(node, (ast.Import, ast.ImportFrom)):
+                for module in [a.name for a in node.names] if isinstance(node, ast.Import) else [node.module or ""]:
+                    root = module.split(".")[0]
+                    if not root or root in _BLOCKED_MODULES:
+                        raise ValueError(f"Line {node.lineno}: importing '{module}' is not allowed")
+                    if importlib.util.find_spec(root) is None:
+                        raise ValueError(f"Line {node.lineno}: '{module}' is not installed, "
+                                         "only installed libraries can be used")
+            name = node.id if isinstance(node, ast.Name) else node.attr if isinstance(node, ast.Attribute) else ""
+            if name in _BLOCKED_NAMES or isinstance(node, ast.Attribute) and name.startswith("__"):
+                raise ValueError(f"Line {node.lineno}: using '{name}' is not allowed")
+        return tree
+
+    def _load_transformer_class(self, tree: ast.Module) -> type[BaseTransformerAPP]:
+        module = types.ModuleType("pyfedappwrap_transformation_source")
+        try:
+            exec(compile(tree, "<transformation>", "exec"), module.__dict__)  # pylint: disable=exec-used
         except Exception as e:  # pylint: disable=broad-exception-caught
             raise ValueError(f"Executing the source code failed, {type(e).__name__}: {e}") from e
 
@@ -112,3 +153,10 @@ class TransformationBuilder:
                              f"{self.mode.value} transformation passes {expected}") from None
         except Exception:  # pylint: disable=broad-exception-caught
             pass  # type hints pydantic cannot resolve or handle are not checked
+
+    @staticmethod
+    def _keys(tree: ast.Module) -> tuple[list[str], list[str]]:
+        transform = next(n for n in ast.walk(tree) if isinstance(n, ast.FunctionDef) and n.name == "transform")
+        analyzer = TransformFunctionAnalyzer(None)
+        param = transform.args.args[1].arg if len(transform.args.args) > 1 else ""
+        return list(dict.fromkeys(analyzer.extract_keys(transform, param))), analyzer.extract_return_keys(transform)

@@ -62,7 +62,7 @@ def validate_value(value: Any, goal: DataTypeTransformationGoalDTO) -> None:
 
     if goal.options:
         if value_to_str(value) not in goal.options:
-            raise ValueError(f"Value {value!r} is not one of the allowed options {goal.options}")
+            raise ValueError("Not one of the allowed options")
         return
 
     normalized = normalize_value(value, goal.type)
@@ -70,15 +70,15 @@ def validate_value(value: Any, goal: DataTypeTransformationGoalDTO) -> None:
         rule = parse_rule(validation, goal.type)
         name = validation.name
         if name == DataTypeValidationType.MINLENGTH and len(normalized) < rule:
-            raise ValueError(f"Value must be at least {rule} characters long")
+            raise ValueError(f"Must be at least {rule} characters long")
         if name == DataTypeValidationType.MAXLENGTH and len(normalized) > rule:
-            raise ValueError(f"Value must be at most {rule} characters long")
+            raise ValueError(f"Must be at most {rule} characters long")
         if name == DataTypeValidationType.PATTERN and not rule.fullmatch(normalized):
-            raise ValueError(f"Value {normalized!r} does not match the pattern {rule.pattern}")
+            raise ValueError(f"Does not match the pattern {rule.pattern}")
         if name == DataTypeValidationType.MIN and normalized < rule:
-            raise ValueError(f"Value {value!r} must be at least {validation.validator}")
+            raise ValueError(f"Must be at least {validation.validator}")
         if name == DataTypeValidationType.MAX and normalized > rule:
-            raise ValueError(f"Value {value!r} must be at most {validation.validator}")
+            raise ValueError(f"Must be at most {validation.validator}")
 
 
 def is_valid_value(value: Any, goal: DataTypeTransformationGoalDTO) -> bool:
@@ -100,15 +100,15 @@ def normalize_value(value: Any, data_type: DataTypes) -> Any:
     if data_type == DataTypes.BOOLEAN:
         text = str(value).strip().lower()
         if text not in ("true", "false"):
-            raise ValueError(f"Value {value!r} is not a valid BOOLEAN, expected true or false")
+            raise ValueError(f"Not a valid BOOLEAN, expected true or false")
         return text == "true"
     if isinstance(value, (bool, np.bool_)):
-        raise ValueError(f"Value {value!r} is not a valid {data_type.value}")
+        raise ValueError(f"Not a valid {data_type.value}")
     try:
         normalized = ADAPTERS[data_type].validate_python(value)
     except ValidationError as e:
         raise ValueError(
-            f"Value {value!r} is not a valid {data_type.value}: {validation_error_message(e)}") from None
+            f"Not a valid {data_type.value}: {validation_error_message(e)}") from None
     if isinstance(normalized, datetime):
         normalized = normalized.replace(tzinfo=timezone.utc) if normalized.tzinfo is None \
             else normalized.astimezone(timezone.utc)

@@ -9,8 +9,8 @@ from pyfedappwrap.engine.config.config import (
     TabularSchemaDTO, FederatedAppBaseConfigDTO, ToolConfigDataType,
 )
 from pyfedappwrap.engine.config.config_handler import load_config, save_config_dto
-from pyfedappwrap.types.transformation.base_transformer import BaseTransformerAPP
-from pyfedappwrap.types.transformation.function_analyzer import (
+from pyfedappwrap.transformation.base_transformer import BaseTransformerAPP
+from pyfedappwrap.transformation.config.function_analyzer import (
     TransformFunctionAnalyzer,
     ParameterInfo,
 )

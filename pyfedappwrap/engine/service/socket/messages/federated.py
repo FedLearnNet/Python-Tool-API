@@ -6,7 +6,7 @@ from typing import Annotated, Any, List, Optional
 from pydantic import BaseModel, ConfigDict, Field
 
 from pyfedappwrap.engine.config.defaults import DEFAULT_APP_COMM_TIMEOUT
-from pyfedappwrap.engine.enums.test_embed_states import RunType, TestEmbedEnum
+from pyfedappwrap.engine.enums.test_embed_states import RunType, WebsocketMessageTypes
 from pyfedappwrap.engine.service.socket.messages.base import BaseSocketMessage
 
 
@@ -87,20 +87,20 @@ class FederatedRoundMessageCreateDTO(BaseModel):
 
 
 class SendFederatedUpdateRunDTO(BaseSocketMessage[FederatedTestRunCreateDTO]):
-    type: TestEmbedEnum = Field(default=TestEmbedEnum.UPDATE_FEDERATED_RUN)
+    type: WebsocketMessageTypes = Field(default=WebsocketMessageTypes.UPDATE_FEDERATED_RUN)
     run_type: RunType = Field(default=RunType.FEDERATED_RUN, alias="runType")
 
 
 class SendFederatedFinishRunDTO(BaseSocketMessage[FederatedTestRunCreateDTO]):
-    type: TestEmbedEnum = Field(default=TestEmbedEnum.FINISH_FEDERATED_RUN)
+    type: WebsocketMessageTypes = Field(default=WebsocketMessageTypes.FINISH_FEDERATED_RUN)
     run_type: RunType = Field(default=RunType.FEDERATED_RUN, alias="runType")
 
 
 class SendFederatedParticipantUpdateDTO(BaseSocketMessage[FederatedParticipantUpdateDTO]):
-    type: TestEmbedEnum = Field(default=TestEmbedEnum.FEDERATED_PARTICIPANT_UPDATE)
+    type: WebsocketMessageTypes = Field(default=WebsocketMessageTypes.FEDERATED_PARTICIPANT_UPDATE)
     run_type: RunType = Field(default=RunType.FEDERATED_RUN, alias="runType")
 
 
 class SendFederatedRoundMessageDTO(BaseSocketMessage[FederatedRoundMessageCreateDTO]):
-    type: TestEmbedEnum = Field(default=TestEmbedEnum.FEDERATED_ROUND_MESSAGE)
+    type: WebsocketMessageTypes = Field(default=WebsocketMessageTypes.FEDERATED_ROUND_MESSAGE)
     run_type: RunType = Field(default=RunType.FEDERATED_RUN, alias="runType")
