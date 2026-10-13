@@ -82,9 +82,7 @@ class BaseTransformerAPP(BaseApp[TConfig, TransformerInputConfig, TransformerOut
 
             return df
         except Exception as e:
-            self.logger.error(f"transform ({e.__class__.__name__}): "
-                              f"{str(e)}", exc_info=e)
-            return None
+            raise RuntimeError(f"transform ({e.__class__.__name__}): {e}") from e
 
     def function_on_cell(self, df: pd.DataFrame):
         # pylint: disable=broad-exception-caught
@@ -107,9 +105,7 @@ class BaseTransformerAPP(BaseApp[TConfig, TransformerInputConfig, TransformerOut
                 df[self.config.column] = df[self.config.column].apply(self.transform)
             return df
         except Exception as e:
-            self.logger.error(f"transform ({e.__class__.__name__}): "
-                              f"{str(e)}", exc_info=e)
-            return None
+            raise RuntimeError(f"transform ({e.__class__.__name__}): {e}") from e
 
     def function_on_patient(self, df: pd.DataFrame):
         # pylint: disable=broad-exception-caught
@@ -150,9 +146,7 @@ class BaseTransformerAPP(BaseApp[TConfig, TransformerInputConfig, TransformerOut
                 return df.iloc[0:0]
             return pd.concat(patients, ignore_index=True)
         except Exception as e:
-            self.logger.error(f"transform ({e.__class__.__name__}): "
-                              f"{str(e)}", exc_info=e)
-            return None
+            raise RuntimeError(f"transform ({e.__class__.__name__}): {e}") from e
 
     def _apply_on_patient(self, patient_df: pd.DataFrame) -> pd.DataFrame:
         records = patient_df.to_dict("records")

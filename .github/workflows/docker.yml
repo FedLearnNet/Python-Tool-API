@@ -9,6 +9,8 @@ on:
       - "docker/Dockerfile.base-r-chainguard"
       - "docker/Dockerfile.base-r-cluster-chainguard"
       - "docker/docker-entrypoint.sh"
+      - "docker/Dockerfile.code-transformer-runtime"
+      - "code-transformer-runtime/**"
       - ".github/workflows/docker.yml"
   workflow_dispatch:
     inputs:
@@ -28,7 +30,7 @@ permissions:
 env:
   REGISTRY: ghcr.io/fedlearnnet/python-tool-api
   PYTHON_VERSION: "3.11"
-  IMAGES: base-python base-python-dep base-r base-r-dep base-r-biocmanager base-r-dep-biocmanager
+  IMAGES: base-python base-python-dep base-r base-r-dep base-r-biocmanager base-r-dep-biocmanager code-transformer-runtime
 
 jobs:
   prepare:
@@ -60,10 +62,16 @@ jobs:
           version="$(python3 -c 'import tomllib; print(tomllib.load(open("pyproject.toml", "rb"))["project"]["version"])')"
           echo "version=$version" >> "$GITHUB_OUTPUT"
           echo "build_date=$(date -u +%Y-%m-%dT%H:%M:%SZ)" >> "$GITHUB_OUTPUT"
-          if [ "$FORCE" != "true" ] && docker buildx imagetools inspect "$REGISTRY/base-r-dep-biocmanager:$version" > /dev/null 2>&1; then
+          # A new image in the chain is built for the current version as well
+          missing=""
+          for image in $IMAGES; do
+            docker buildx imagetools inspect "$REGISTRY/$image:$version" > /dev/null 2>&1 || missing="$missing $image"
+          done
+          if [ "$FORCE" != "true" ] && [ -z "$missing" ]; then
             echo "Images for pyfedappwrap $version already exist, nothing to build."
             echo "build=false" >> "$GITHUB_OUTPUT"
           else
+            echo "Building, missing:${missing:- none (forced)}"
             echo "build=true" >> "$GITHUB_OUTPUT"
           fi
 
@@ -114,6 +122,7 @@ jobs:
           ctx="$RUNNER_TEMP/docker-context"
           mkdir -p "$ctx"
           cp docker/docker-entrypoint.sh "$ctx/"
+          cp -r code-transformer-runtime "$ctx/"
 
           build() { # <dockerfile> <image> [build args...]
             local file="$1" image="$2"
@@ -138,6 +147,7 @@ jobs:
           build docker/Dockerfile.base-r-chainguard         base-r-dep             --build-arg BASE_IMAGE="$REGISTRY/base-python-dep:$VERSION-$ARCH"
           build docker/Dockerfile.base-r-cluster-chainguard base-r-biocmanager     --build-arg BASE_IMAGE="$REGISTRY/base-r:$VERSION-$ARCH"
           build docker/Dockerfile.base-r-cluster-chainguard base-r-dep-biocmanager --build-arg BASE_IMAGE="$REGISTRY/base-r-dep:$VERSION-$ARCH"
+          build docker/Dockerfile.code-transformer-runtime  code-transformer-runtime --build-arg BASE_IMAGE="$REGISTRY/base-python-dep:$VERSION-$ARCH"
 
       - name: Push images
         env:

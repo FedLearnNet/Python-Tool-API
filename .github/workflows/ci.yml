@@ -6,6 +6,7 @@ on:
     paths:
       - "pyfedappwrap/**"
       - "tests/**"
+      - "code-transformer-runtime/**"
       - "pyproject.toml"
       - "MANIFEST.in"
       - ".github/workflows/ci.yml"
@@ -13,6 +14,7 @@ on:
     paths:
       - "pyfedappwrap/**"
       - "tests/**"
+      - "code-transformer-runtime/**"
       - "pyproject.toml"
       - "MANIFEST.in"
       - ".github/workflows/ci.yml"
@@ -50,13 +52,17 @@ jobs:
       - name: Run tests
         run: pytest --junitxml=test-results/junit.xml
 
+      - name: Run code transformer runtime tests
+        working-directory: code-transformer-runtime
+        run: python -m pytest . --junitxml=../test-results/code-transformer-runtime.xml
+
       # Summary on the run page and failed tests as annotations. annotate_only needs no check run,
       # so it also works with the read-only token of pull requests from forks.
       - name: Publish test results
         if: ${{ !cancelled() }}
         uses: mikepenz/action-junit-report@v6.5.0
         with:
-          report_paths: "test-results/junit.xml"
+          report_paths: "test-results/*.xml"
           annotate_only: true
           require_tests: true
           include_time_in_summary: true

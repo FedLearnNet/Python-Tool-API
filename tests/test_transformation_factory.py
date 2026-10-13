@@ -1,12 +1,18 @@
+import os
 import re
+import subprocess
+import sys
 
 import pytest
 
+from pyfedappwrap.learning.base_app import BaseApp
+from pyfedappwrap.transformation.config.transformer_config import BaseTransformerConfig
 from pyfedappwrap.transformation.validate.datatype_dto import DataTypeTransformationGoalDTO, DataTypes, \
     DataTypeValidationDTO, DataTypeValidationType
 from pyfedappwrap.transformation.factory.factory_builder import TransformationBuilder
 from pyfedappwrap.transformation.factory.factory_test import TransformationTester, \
     test_function as run_factory_test
+from pyfedappwrap.transformation.factory.factory_test_result import TransformationTestCaseDTO
 from pyfedappwrap.transformation.transformation_mode import FunctionExecutionMode
 
 HEADER = """
@@ -118,6 +124,24 @@ def test_save_writes_source_as_module(tmp_path) -> None:
         builder.save(tmp_path / "transformers")
     assert builder.save(tmp_path / "transformers", overwrite=True) == path
     assert [p.name for p in (tmp_path / "transformers").iterdir()] == ["bmi_to_http_code.py"]
+
+
+def test_wrapped_body_resolves_the_transformer_config() -> None:
+    builder = TransformationBuilder(TransformationBuilder.wrap_body("return value", FunctionExecutionMode.CELL))
+    assert BaseApp._resolve_baseapp_types(builder.transformer_class)[0] is BaseTransformerConfig
+
+
+@pytest.mark.parametrize("maximum,code", [(10, 0), (2, 1)])
+def test_registered_main_tests_against_the_case(tmp_path, maximum, code) -> None:
+    builder = TransformationBuilder(ROW_SUM)
+    case = TransformationTestCaseDTO(mode=FunctionExecutionMode.ROW, goal=_dt(DataTypes.INT, max=maximum),
+                                     data={"a": [1, 2], "b": [3, 4]})
+    main = builder.register(builder.save(tmp_path), case)
+    assert main.read_text(encoding="utf-8").splitlines()[1] == "from sum import Sum"
+    assert TransformationTestCaseDTO.model_validate_json((tmp_path / "test.json").read_text()) == case
+    result = subprocess.run([sys.executable, "-m", "main"], cwd=tmp_path, capture_output=True, text=True,
+                            env={**os.environ, "TEST_MODE": "true"}, check=False)
+    assert result.returncode == code, result.stderr
 
 
 def test_row_with_generated_data() -> None:

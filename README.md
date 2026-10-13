@@ -1,10 +1,12 @@
 # FL-Net Python Tool API
 
 ```bash
-pip install FL-Net-Python-Tool-API
+pip install "FL-Net-Python-Tool-API~=0.7.12"
 ```
 
 The package is imported as `pyfedappwrap` (`from pyfedappwrap.engine.runtime import FedDBEngine`).
+Use the distribution name `FL-Net-Python-Tool-API` in dependency files; `pyfedappwrap`
+is the Python import name.
 
 Python SDK and runtime for building **FL-Net tools** ("apps"): local analyses, preprocessing/transformer
 steps, exports and federated learning apps. You implement the logic; pyfedappwrap handles the communication

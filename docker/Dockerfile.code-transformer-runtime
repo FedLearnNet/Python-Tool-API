@@ -1,0 +1,11 @@
+# Runner for custom ETL transformation code (see code-transformer-runtime/README.md). Custom transformers saved
+# through it are built FROM this image, so they share its pyfedappwrap version.
+ARG BASE_IMAGE=ghcr.io/fedlearnnet/python-tool-api/base-python-dep:latest
+FROM ${BASE_IMAGE}
+
+ENV FEDDB_IMAGE_FAMILY=code-transformer-runtime
+
+COPY --chown=nonroot code-transformer-runtime/app.yml code-transformer-runtime/README.md \
+     code-transformer-runtime/main.py code-transformer-runtime/check.py ./
+
+CMD ["python", "-m", "main"]

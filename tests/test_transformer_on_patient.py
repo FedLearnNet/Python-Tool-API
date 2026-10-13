@@ -1,6 +1,7 @@
 import logging
 
 import pandas as pd
+import pytest
 
 from pyfedappwrap.transformation.base_transformer import BaseTransformerAPP
 from pyfedappwrap.transformation.config.transformer_config import BaseTransformerConfig
@@ -66,11 +67,14 @@ def test_empty_result_drops_patient() -> None:
 def test_missing_patient_id_and_invalid_results_fail() -> None:
     df = _df()
     df.loc[0, "pid"] = None
-    assert _PatientApp(lambda rows: rows).function_on_patient(df) is None
+    with pytest.raises(RuntimeError, match="missing the external patient id"):
+        _PatientApp(lambda rows: rows).function_on_patient(df)
 
     too_many = _PatientApp(lambda rows: [{}] * (len(rows) + 1))
-    assert too_many.function_on_patient(_df()) is None
+    with pytest.raises(RuntimeError, match="more results than the patient has rows"):
+        too_many.function_on_patient(_df())
 
     filter_without_order = _PatientApp(lambda rows: [{}])
-    assert filter_without_order.function_on_patient(_df()) is None
+    with pytest.raises(RuntimeError, match="invalid patient row order"):
+        filter_without_order.function_on_patient(_df())
 

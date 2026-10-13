@@ -73,7 +73,8 @@ class WebSocketClient(Subject, threading.Thread):
 
         async with websockets.connect(self.uri,
                                       additional_headers=self.additional_headers,
-                                      open_timeout=30) as websocket:
+                                      open_timeout=30,
+                                      max_size=None) as websocket:
             self.websocket = websocket
             await self.receive_messages()
 
@@ -82,7 +83,7 @@ class WebSocketClient(Subject, threading.Thread):
         while not self.lifecycle.is_stopping():
             try:
                 message = await self.websocket.recv()
-                logging.info(f"Received message: {message}")
+                logging.info(f"Received message: {message[:500]}")
                 try:
                     event_dto = BaseSocketMessage.model_validate_json(message)
                 except ValidationError:

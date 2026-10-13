@@ -13,6 +13,7 @@ from pydantic.alias_generators import to_snake
 from pyfedappwrap.transformation.base_transformer import BaseTransformerAPP
 from pyfedappwrap.transformation.config.function_analyzer import TransformFunctionAnalyzer
 from pyfedappwrap.transformation.config.transformer_config import BaseTransformerConfig
+from pyfedappwrap.transformation.factory.factory_test_result import TransformationTestCaseDTO
 from pyfedappwrap.transformation.transformation_mode import FunctionExecutionMode
 
 _MODE_INPUT = {
@@ -25,10 +26,15 @@ _HEADERS = {
     FunctionExecutionMode.PATIENT: "def transform(self, rows: list[dict]):",
     FunctionExecutionMode.CELL: "def transform(self, value):",
 }
-_TEMPLATE = ("from pyfedappwrap.transformation.base_transformer import BaseTransformerAPP\n"
-             "class CodeTransformer(BaseTransformerAPP):\n"
+_TEMPLATE = ("from pyfedappwrap.transformation.base_transformer import BaseTransformerAPP, BaseTransformerConfig\n"
+             "class CodeTransformer(BaseTransformerAPP[BaseTransformerConfig]):\n"
              "    {header}\n"
              "{body}\n")
+_MAIN = ("from pyfedappwrap.transformation.factory.factory_main import run\n"
+         "from {module} import {cls}\n\n"
+         "if __name__ == \"__main__\":\n"
+         "    run({cls})\n")
+TEST_FILE = "test.json"
 _BLOCKED_MODULES = {"os", "sys", "subprocess", "socket", "shutil", "importlib", "ctypes"}
 _BLOCKED_NAMES = {"exec", "eval", "open", "compile", "__import__"}
 
@@ -80,14 +86,21 @@ class TransformationBuilder:
         path = Path(directory) / f"{self.module_name}.py"
         if path.exists() and not overwrite:
             raise FileExistsError(f"Transformation {path} already exists")
+        return self._write(path, self.source_code)
+
+    def register(self, path: Path, case: TransformationTestCaseDTO) -> Path:
+        """Writes main.py serving the saved transformation, in test mode it is tested against ``case``."""
+        self._write(path.parent / TEST_FILE, case.model_dump_json(by_alias=True))
+        return self._write(path.parent / "main.py",
+                           _MAIN.format(module=path.stem, cls=self.transformer_class.__name__))
+
+    @staticmethod
+    def _write(path: Path, text: str) -> Path:
         path.parent.mkdir(parents=True, exist_ok=True)
         # written next to the target and moved into place, so the file is never half written
-        tmp = path.with_suffix(".py.tmp")
-        tmp.write_text(self.source_code, encoding="utf-8")
+        tmp = path.with_name(path.name + ".tmp")
+        tmp.write_text(text, encoding="utf-8")
         return tmp.replace(path)
-
-    def register(self, path: Path) -> None:
-        """Registers the saved transformation in main.py for a later build. Not implemented yet."""
 
     def _check_source(self) -> ast.Module:
         try:
