@@ -1,2 +1,2 @@
-include *.md requirements.txt
+include *.md
 recursive-include pyfedappwrap/engine/tests/federated *.yml

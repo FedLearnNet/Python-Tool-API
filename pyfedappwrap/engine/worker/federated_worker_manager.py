@@ -11,7 +11,7 @@ from typing import Any, Optional
 from pyfedappwrap.engine.config.defaults import DEFAULT_APP_COMM_TIMEOUT
 from pyfedappwrap.engine.config.system_config import system_settings
 from pyfedappwrap.engine.federated.aggregator import AppAggregator
-from pyfedappwrap.engine.enums.test_embed_states import RunType, TestEmbedEnum
+from pyfedappwrap.engine.enums.test_embed_states import RunType, WebsocketMessageTypes
 from pyfedappwrap.engine.federated.models import (
     FederatedParticipantType,
     FLNetLocalParticipantConfigDTO,
@@ -61,8 +61,8 @@ class FederatedWorkerManager(Observer):
         if event_type is None:
             return
         if not (
-            TestEmbedEnum.START_FEDERATED_RUN.equals(event_type)
-            or TestEmbedEnum.START_FEDERATED_TEST_RUN.equals(event_type)
+                WebsocketMessageTypes.START_FEDERATED_RUN.equals(event_type)
+                or WebsocketMessageTypes.START_FEDERATED_TEST_RUN.equals(event_type)
         ):
             return
 
@@ -138,7 +138,7 @@ class FederatedWorkerManager(Observer):
 
     @classmethod
     def _effective_run_type(cls, event_type: Any, run_type: Any) -> Any:
-        if cls._is_test_run(run_type) or TestEmbedEnum.START_FEDERATED_TEST_RUN.equals(event_type):
+        if cls._is_test_run(run_type) or WebsocketMessageTypes.START_FEDERATED_TEST_RUN.equals(event_type):
             return RunType.FEDERATED_TEST_RUN
         return run_type
 

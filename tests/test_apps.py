@@ -6,8 +6,9 @@ from tests.apps.self_learned import SelfLearnedTestApp, SelfLearnedTestAppIris
 from tests.apps.database_adopter import DatabaseAdopterTest
 from tests.apps.preprocess import DataPreProcessTestApp
 from tests.apps.export import ExportTestApp
+from tests import TEST_DATA_DIR
 
-system_settings.data_dir = "data"
+system_settings.data_dir = str(TEST_DATA_DIR)
 
 def test_analysis():
     system_settings.config_settings_path = "tests/configs/data_analysis_app.yml"

@@ -6,7 +6,7 @@ import pandas as pd
 from pyfedappwrap.learning.base_app import BaseApp
 from pyfedappwrap.learning.run_runfig import AppConfig, AppOutputConfig
 from pyfedappwrap.types.export.export_config import ExportInputConfig
-from pyfedappwrap.types.transformation.transformer_config import TransformerInputConfig
+from pyfedappwrap.transformation.config.transformer_config import TransformerInputConfig
 
 C = TypeVar('C', bound=AppConfig)
 O = TypeVar('O', bound=AppOutputConfig)

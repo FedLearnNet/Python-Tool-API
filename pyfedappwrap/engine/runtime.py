@@ -23,8 +23,8 @@ from pyfedappwrap.engine.worker.federated_worker_manager import FederatedWorkerM
 from pyfedappwrap.engine.worker.worker_manager import WorkerManager
 from pyfedappwrap.learning.base_app import BaseApp
 from pyfedappwrap.learning.federated import BaseFederatedApp
-from pyfedappwrap.types.transformation.base_transformer import BaseTransformerAPP
-from pyfedappwrap.types.transformation.config_writer import write_transformer_config
+from pyfedappwrap.transformation.base_transformer import BaseTransformerAPP
+from pyfedappwrap.transformation.config.config_writer import write_transformer_config
 
 
 class FedDBEngine(threading.Thread):

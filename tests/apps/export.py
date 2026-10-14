@@ -4,6 +4,7 @@ from typing import Optional
 import pandas as pd
 from pydantic.dataclasses import dataclass
 
+from pyfedappwrap.engine.config.system_config import get_output_dir
 from pyfedappwrap.learning.run_runfig import AppConfig, AppOutputConfig
 from pyfedappwrap.types.export.base_exporter import BaseExporterAPP
 
@@ -21,6 +22,6 @@ class ExportTestOutputConfig(AppOutputConfig):
 class ExportTestApp(BaseExporterAPP[ExportTestConfig, ExportTestOutputConfig]):
 
     def export(self, df: pd.DataFrame) -> ExportTestOutputConfig:
-        out = Path(f"{self.config.report_name}.txt")
+        out = Path(get_output_dir()) / f"{self.config.report_name}.txt"
         out.write_text(f"rows={len(df)}\ncols={len(df.columns)}\n", encoding="utf-8")
         return ExportTestOutputConfig(report=out)
