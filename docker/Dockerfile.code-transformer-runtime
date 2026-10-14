@@ -5,6 +5,13 @@ FROM ${BASE_IMAGE}
 
 ENV FEDDB_IMAGE_FAMILY=code-transformer-runtime
 
+# Branch builds install the SDK of their commit over the released one of the base image, for changes not on PyPI yet;
+# releases leave it empty and keep the SDK of the base image
+ARG SDK_REF=""
+RUN if [ -n "${SDK_REF}" ]; then \
+      pip install --no-cache-dir "https://github.com/FedLearnNet/Python-Tool-API/archive/${SDK_REF}.tar.gz"; \
+    fi
+
 COPY --chown=nonroot code-transformer-runtime/app.yml code-transformer-runtime/README.md \
      code-transformer-runtime/main.py code-transformer-runtime/check.py ./
 
