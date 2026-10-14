@@ -368,7 +368,7 @@ class BaseApp(ABC, Generic[C, I, O]):
 
     def perform_task(self, task: AppTaskMessage):
         """Simulate performing a task."""
-        self.logger.info(f"Starting task: {task}", "task")
+        self.logger.info(f"Starting task: {task}")
         # TODO rename columns is input mapping is there in config, put it into map before validation and run
         if task.task == WebsocketMessageTypes.START_RUN:
             config_instance, input_config_instance = self.map(task.body)
@@ -376,7 +376,7 @@ class BaseApp(ABC, Generic[C, I, O]):
         if task.task == WebsocketMessageTypes.START_PREDICTION:
             config_instance, input_config_instance = self.map(task.body)
             self.start(config_instance, input_config_instance, ModeType.PREDICTION)
-        self.logger.info(f"Task completed: {task}", "task")
+        self.logger.info(f"Task completed: {task}")
 
     def needs_mode_specific_validation(self, mode: ModeType) -> ModeType:
         if self.tool_type == AppType.ANALYSIS:
@@ -422,7 +422,7 @@ class BaseApp(ABC, Generic[C, I, O]):
     async def enqueue_task(self, task: AppTaskMessage):
         """Add a task to the queue."""
         await self.task_queue.put(task)
-        self.logger.info(f"Task added to queue: {task}", "task")
+        self.logger.info(f"Task added to queue: {task}")
 
     @staticmethod
     def _resolve_baseapp_types(cls):
