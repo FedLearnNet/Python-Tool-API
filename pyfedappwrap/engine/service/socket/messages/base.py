@@ -2,7 +2,7 @@ import abc
 from typing import Generic, TypeVar, Annotated
 from pydantic import BaseModel, Field, ConfigDict
 
-from pyfedappwrap.engine.enums.test_embed_states import RunType, TestEmbedEnum
+from pyfedappwrap.engine.enums.test_embed_states import RunType, WebsocketMessageTypes
 
 M = TypeVar('M')
 
@@ -15,7 +15,7 @@ class BaseSocketMessage(BaseModel, abc.ABC, Generic[M]):
 
     message: Annotated[M, Field(description="The message payload", alias='message')]
     run_type: Annotated[RunType, Field(description="The type of run", alias='runType')]
-    type: Annotated[TestEmbedEnum, Field(description="The embedded enum type", alias='type')]
+    type: Annotated[WebsocketMessageTypes, Field(description="The embedded enum type", alias='type')]
 
     def to_json(self):
         return self.model_dump_json(by_alias=True)

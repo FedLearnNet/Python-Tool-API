@@ -20,7 +20,7 @@ from asyncio import Queue
 from typing import Optional
 
 from pyfedappwrap.engine.config.system_config import system_settings
-from pyfedappwrap.engine.enums.test_embed_states import RunType, TestEmbedEnum
+from pyfedappwrap.engine.enums.test_embed_states import RunType, WebsocketMessageTypes
 from pyfedappwrap.engine.federated.aggregator import AppAggregator
 from pyfedappwrap.engine.logger import WebSocketLogger
 from pyfedappwrap.engine.runtime_lifecycle import EngineLifecycle
@@ -113,10 +113,8 @@ class AggregatorOnlyWorker:
             traceback.print_exc()
 
     def _perform_task(self, task: AppTaskMessage):
-        if task.task.lower() not in (
-            str(TestEmbedEnum.START_RUN).lower(),
-            str(TestEmbedEnum.START_PREDICTION).lower(),
-        ):
+        if not (WebsocketMessageTypes.START_RUN.equals(task.task)
+                or WebsocketMessageTypes.START_PREDICTION.equals(task.task)):
             return
         try:
             self._run_aggregation(task.body)

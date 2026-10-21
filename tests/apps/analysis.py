@@ -10,6 +10,7 @@ from pyfedappwrap.engine.runtime import FedDBEngine
 from pyfedappwrap.engine.runtime_lifecycle import EngineResult
 from pyfedappwrap.learning.base_app import BaseApp, I, O
 from pyfedappwrap.learning.run_runfig import AppConfig, AppInputConfig, AppOutputConfig
+from tests import TEST_DATA_DIR
 
 
 @dataclass
@@ -58,7 +59,7 @@ class AnalysisTestApp(BaseApp[MyAppConfig, MyAppInputConfig, MyAppOutputConfig])
 
 if __name__ == '__main__':
     os.chdir("../../")
-system_settings.data_dir = "data"
+system_settings.data_dir = str(TEST_DATA_DIR)
 system_settings.config_settings_path = "tests/configs/data_analysis_app.yml"
 system_settings.enable_remote_result_saving = False
 print(system_settings)

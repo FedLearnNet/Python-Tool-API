@@ -1,10 +1,10 @@
 import asyncio
-import json
 import logging
 import threading
 import traceback
 
 import websockets
+from pydantic import ValidationError
 
 from pyfedappwrap.engine.events.internal_events import handle_internal_event
 from pyfedappwrap.engine.observer.subject import Subject
@@ -73,7 +73,8 @@ class WebSocketClient(Subject, threading.Thread):
 
         async with websockets.connect(self.uri,
                                       additional_headers=self.additional_headers,
-                                      open_timeout=30) as websocket:
+                                      open_timeout=30,
+                                      max_size=None) as websocket:
             self.websocket = websocket
             await self.receive_messages()
 
@@ -82,12 +83,13 @@ class WebSocketClient(Subject, threading.Thread):
         while not self.lifecycle.is_stopping():
             try:
                 message = await self.websocket.recv()
-                logging.info(f"Received message: {message}")
+                logging.info(f"Received message: {message[:500]}")
                 try:
                     event_dto = BaseSocketMessage.model_validate_json(message)
-                    self.handle_event(event_dto)
-                except json.JSONDecodeError:
-                    self.handle_error(message)
+                except ValidationError:
+                    logging.warning(f"Ignoring unsupported message: {message}")
+                    continue
+                self.handle_event(event_dto)
             except websockets.ConnectionClosed:
                 logging.info("WebSocket connection closed.")
                 break
@@ -98,10 +100,6 @@ class WebSocketClient(Subject, threading.Thread):
     def handle_event(self, event: BaseSocketMessage):
         handle_internal_event(event, self.send)
         self.set_state(event)
-
-    def handle_error(self, message):
-        logging.info(f"Error handling message: {message}")
-        self.lifecycle.add_error(message)
 
     def send(self, message: BaseSocketMessage):
         """Send messages through WebSocket."""

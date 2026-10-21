@@ -66,3 +66,11 @@ venv/
 
 .claude
 
+
+# Local settings; copy .env.example to .env
+.env
+
+# Written by local runs of scripts/ (the test suite writes to a temp dir)
+/output.csv
+/dummy_file.txt
+test-results/

@@ -8,7 +8,7 @@ import numpy as np
 import pytest
 
 from pyfedappwrap.engine.config.system_config import system_settings
-from pyfedappwrap.engine.enums.test_embed_states import TestEmbedEnum as EmbedEventType
+from pyfedappwrap.engine.enums.test_embed_states import WebsocketMessageTypes as EmbedEventType
 from pyfedappwrap.engine.enums.test_embed_states import RunType
 from pyfedappwrap.engine.federated import (
     AppAggregator,
@@ -904,7 +904,7 @@ def test_local_runner_does_not_leak_observers_across_runs():
     shared notice subject."""
     from pyfedappwrap.engine.tests.federated.runner import LocalFederatedRunner
     import tempfile
-    system_settings.config_settings_path = "app_federated.yml"
+    system_settings.config_settings_path = "tests/configs/federated_app.yml"
 
     with tempfile.TemporaryDirectory() as tmp:
         base = Path(tmp)

@@ -6,11 +6,12 @@ from typing import Optional, Any
 from typing_extensions import override
 
 from examples.config import MyAppInputConfig
-from pyfedappwrap.engine.config.system_config import system_settings
+from pyfedappwrap.engine.config.system_config import get_output_dir, system_settings
 from pyfedappwrap.engine.runtime import FedDBEngine
 from pyfedappwrap.engine.runtime_lifecycle import EngineResult
 from pyfedappwrap.learning.run_runfig import AppConfig, OneCSVOuputConfig
 from pyfedappwrap.types.databaseadopter.base_importer import BaseExtractorAdopterAPP
+from tests import TEST_DATA_DIR
 
 
 @dataclass
@@ -22,8 +23,8 @@ class DatabaseAdopterTest(
     BaseExtractorAdopterAPP[MyAppConfig, MyAppInputConfig, OneCSVOuputConfig]):
 
     def run_adopter(self) -> OneCSVOuputConfig:
-        output = Path("data/iris_adopter.csv")
-        shutil.copyfile("data/iris.csv", output)
+        output = Path(get_output_dir()) / "iris_adopter.csv"
+        shutil.copyfile(TEST_DATA_DIR / "iris.csv", output)
         return OneCSVOuputConfig(output=output)
 
     def __init__(self):
@@ -35,7 +36,7 @@ class DatabaseAdopterTest(
 
 if __name__ == '__main__':
     os.chdir("../../")
-    system_settings.data_dir = "data"
+    system_settings.data_dir = str(TEST_DATA_DIR)
     system_settings.config_settings_path = "tests/configs/data_base_adopter_app.yml"
     system_settings.enable_remote_result_saving = False
     print(system_settings)
