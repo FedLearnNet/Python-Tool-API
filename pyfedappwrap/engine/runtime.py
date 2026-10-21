@@ -185,3 +185,4 @@ class FedDBEngine(threading.Thread):
     def register_aggregator(self, aggregator, key: str = "default"):
         self._aggregators[key] = aggregator
         self.federated_worker_manager.register_aggregator(aggregator, key)
+        self.worker_manager.register_aggregator(aggregator, key)
