@@ -36,7 +36,8 @@ pytest
 | `tests/` | Test suite, with test apps in `tests/apps/`, configs in `tests/configs/` and input data in `tests/data/` |
 | `examples/` | Example apps for tool authors |
 | `scripts/` | Local dev runners, started from the repository root (`python -m scripts.run_local`) |
-| `docker/` | Base image Dockerfiles, built by `.github/workflows/docker.yml` |
+| `docker/` | Base image Dockerfiles, built by `.github/workflows/docker.yml` (`Dockerfile.local`: local builds only, see `dev_scripts/`) |
+| `dev_scripts/` | `build_local_docker_image.sh`: builds `base-python-dep:testingtag` with this checkout, to test Tool API changes in the FL-Net-Sandbox |
 
 Local settings go into `.env` (template: `.env.example`).
 
