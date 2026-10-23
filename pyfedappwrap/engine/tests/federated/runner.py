@@ -75,8 +75,12 @@ class LocalFederatedRunner:
                  lifecycle: EngineLifecycle | None = None,
                  reporter: FederatedStatusReporter | None = None,
                  run_id: int | None = None,
-                 run_type: RunType = RunType.FEDERATED_RUN):
+                 run_type: RunType = RunType.FEDERATED_RUN,
+                 round_source_app: Any = None):
         self.config = config
+        # App whose config type resolves the aggregator's round count when the aggregator has no
+        # training app of its own (aggregator-only participant).
+        self.round_source_app = round_source_app
         self.controller = None if self._uses_external_controller() else FLNetInMemoryController(config)
         if self.controller is None:
             logger.info(
@@ -532,8 +536,10 @@ class LocalFederatedRunner:
                 # Lock the aggregator's round count to the coordinator training app's resolved config
                 # so both loop the same number of rounds (the app gets federated_rounds from the
                 # dataclass default when hyper_params omits it; the raw-dict fallback would give 1).
-                agg_rounds = (self._resolve_rounds_from_app(coordinator_app, participant)
-                              if coordinator_app is not None else None)
+                # Without a coordinator app (aggregator-only) the registered app's config is used.
+                round_app = coordinator_app if coordinator_app is not None else self.round_source_app
+                agg_rounds = (self._resolve_rounds_from_app(round_app, participant)
+                              if round_app is not None else None)
                 threads.append(self._build_aggregator_thread(
                     participant, results, results_lock, bridge, agg_rounds))
                 if coordinator_app is not None:

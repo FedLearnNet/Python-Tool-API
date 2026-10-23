@@ -2,6 +2,7 @@ from pathlib import Path
 
 import numpy as np
 import pandas as pd
+from pydantic.dataclasses import dataclass
 
 from pyfedappwrap.engine.config.system_config import system_settings
 from pyfedappwrap.engine.federated import (
@@ -11,8 +12,14 @@ from pyfedappwrap.engine.federated import (
 from pyfedappwrap.engine.tests.federated.runner import LocalFederatedRunner
 from pyfedappwrap.engine.federated.reporter import FederatedStatusReporter
 from pyfedappwrap.engine.worker.run_dto import RunStatusTypes
+from pyfedappwrap.learning.federated import BaseFederatedApp
 from tests.apps.federated_aggregator import MeanVectorAggregator
-from tests.apps.federated_client import FederatedMeanClientApp
+from tests.apps.federated_client import (
+    FederatedClientConfig,
+    FederatedClientInput,
+    FederatedClientOutput,
+    FederatedMeanClientApp,
+)
 
 
 def _prepare_participant_dir(base_dir: Path, rows: list[dict[str, float]] | None = None):
@@ -300,3 +307,80 @@ def test_local_federated_runner_can_skip_local_aggregator_start(tmp_path: Path):
 
     assert results["aggregator"].success is True
     assert results["aggregator"].result is None
+
+
+@dataclass
+class _MultiRoundClientConfig(FederatedClientConfig):
+    federated_rounds: int = 3
+
+
+class _MultiRoundMeanClientApp(
+    BaseFederatedApp[_MultiRoundClientConfig, FederatedClientInput, FederatedClientOutput]
+):
+    def run_train(self, data: FederatedClientInput) -> FederatedClientOutput:
+        df = data.input if data is not None and data.input is not None \
+            else FederatedMeanClientApp._fallback_input_dataframe(self)
+        vector = df.select_dtypes(include="number").mean().to_numpy(dtype=float)
+        for round_nr in range(1, self.config.federated_rounds + 1):
+            communication_id = f"round-{round_nr}"
+            self.communicator.send_data_to_aggregator(
+                vector, aggregator_name="mean", communication_id=communication_id)
+            vector = self.communicator.await_data_from_aggregator(
+                aggregator="mean", communication_id=communication_id, data_type=np.ndarray).data
+        return FederatedClientOutput(output=pd.DataFrame([vector]))
+
+    def run_prediction(self, data: FederatedClientInput) -> FederatedClientOutput:
+        return self.run_train(data)
+
+    def _save(self) -> str:
+        return "client"
+
+    def _load(self, path: str):
+        return Path(path)
+
+
+class _CountingMeanAggregator(MeanVectorAggregator):
+    def __init__(self):
+        super().__init__()
+        self.calls = 0
+
+    def aggregate(self, data, n_clients, meta=None):
+        self.calls += 1
+        return super().aggregate(data, n_clients, meta)
+
+
+def test_local_federated_runner_aggregator_only_resolves_rounds_from_round_source_app(tmp_path: Path):
+    system_settings.config_settings_path = "tests/configs/federated_app.yml"
+    aggregator_dir = tmp_path / "aggregator"
+    client1_dir = tmp_path / "client1"
+    client2_dir = tmp_path / "client2"
+
+    _prepare_participant_dir(aggregator_dir)
+    _prepare_participant_dir(client1_dir, [{"x": 1.0, "y": 3.0}])
+    _prepare_participant_dir(client2_dir, [{"x": 5.0, "y": 7.0}])
+
+    # No federated_rounds in any hyper_params: the clients loop the dataclass default (3), and the
+    # aggregator, having no training app of its own, must resolve the same count via round_source_app.
+    config = FLNetLocalTestConfigDTO(
+        aggregator_id="aggregator",
+        participants=[
+            FLNetLocalParticipantConfigDTO(participant_id="aggregator", role="aggregator",
+                                           base_dir=aggregator_dir),
+            FLNetLocalParticipantConfigDTO(participant_id="client-1", role="client",
+                                           base_dir=client1_dir, input_file_paths={"input": "input.csv"}),
+            FLNetLocalParticipantConfigDTO(participant_id="client-2", role="client",
+                                           base_dir=client2_dir, input_file_paths={"input": "input.csv"}),
+        ],
+    )
+    aggregator = _CountingMeanAggregator()
+
+    runner = LocalFederatedRunner(config, aggregators={"mean": aggregator},
+                                  round_source_app=_MultiRoundMeanClientApp())
+    results = runner.run({
+        "client-1": _MultiRoundMeanClientApp(),
+        "client-2": _MultiRoundMeanClientApp(),
+    })
+
+    assert all(result.success for result in results.values()), results
+    assert aggregator.calls == 3
+    assert np.allclose(results["aggregator"].result, np.array([3.0, 5.0]))
