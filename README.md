@@ -40,6 +40,19 @@ pytest
 
 Local settings go into `.env` (template: `.env.example`).
 
+### Develop builds
+
+`develop` carries the next version as `X.Y.Z.dev` (`.github/scripts/version.sh`), like all FL-Net repositories.
+Every push to `develop` that changes the package is published to TestPyPI as `X.Y.Z.dev<run>`, since package indexes
+never take a version twice, and all base images are rebuilt with it under the moving tags `X.Y.Z.dev` and `staging`.
+A tool tries unreleased changes without a merge to `main`:
+
+```dockerfile
+FROM ghcr.io/fedlearnnet/python-tool-api/base-python-dep:0.7.15.dev
+```
+
+Only the SDK comes from TestPyPI, its dependencies come from PyPI.
+
 
 ## License
 

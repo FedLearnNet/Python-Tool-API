@@ -7,6 +7,8 @@ ARG PYTHON_VERSION=3.11
 ARG PYFEDAPPWRAP_VERSION=0.6.15
 #pyfedappwrap deps (0 = no deps, 1 = with deps)
 ARG PYFEDAPPWRAP_WITH_DEPS=0
+# Index of pyfedappwrap itself, empty = PyPI; dev images use TestPyPI. Its dependencies always come from PyPI.
+ARG PYFEDAPPWRAP_INDEX_URL=""
 
 ARG FEDDB_IMAGE_BUILD_DATE=unknown
 
@@ -27,11 +29,17 @@ RUN apk add --no-cache \
 RUN python -m venv /opt/venv
 
 RUN set -eux; \
+    package="FL-Net-Python-Tool-API==${PYFEDAPPWRAP_VERSION}"; \
+    if [ -n "${PYFEDAPPWRAP_INDEX_URL}" ]; then \
+      pip download --no-cache-dir --no-deps --index-url "${PYFEDAPPWRAP_INDEX_URL}" -d /tmp/pyfedappwrap "${package}"; \
+      package="$(ls /tmp/pyfedappwrap/*)"; \
+    fi; \
     if [ "${PYFEDAPPWRAP_WITH_DEPS}" = "1" ] || [ "${PYFEDAPPWRAP_WITH_DEPS}" = "true" ]; then \
-      pip install --no-cache-dir "FL-Net-Python-Tool-API==${PYFEDAPPWRAP_VERSION}"; \
+      pip install --no-cache-dir "${package}"; \
     else \
-      pip install --no-cache-dir "FL-Net-Python-Tool-API==${PYFEDAPPWRAP_VERSION}" --no-deps; \
-    fi
+      pip install --no-cache-dir "${package}" --no-deps; \
+    fi; \
+    rm -rf /tmp/pyfedappwrap
 
 
 COPY docker-entrypoint.sh /usr/local/bin/docker-entrypoint.sh
