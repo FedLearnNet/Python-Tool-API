@@ -1,5 +1,5 @@
 import logging
-from typing import Any
+from typing import Any, Optional
 from urllib.parse import urlparse
 
 import requests
@@ -30,7 +30,7 @@ def is_remote_resource(value: Any) -> bool:
         return False
 
 
-def download_file(file_url: str, token: str, as_utf_8: bool = False) -> str | bytes | None | Any:
+def download_file(file_url: str, token: Optional[str], as_utf_8: bool = False) -> str | bytes | None | Any:
     parsed_file_url = replace_domain(file_url, system_settings.http_url)
     url = remove_path_prefix(parsed_file_url, system_settings.url_prefix_remove)
     headers = get_request_header(token)
