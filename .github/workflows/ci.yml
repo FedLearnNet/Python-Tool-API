@@ -34,7 +34,7 @@ jobs:
     runs-on: ubuntu-24.04
     timeout-minutes: 20
     steps:
-      - uses: actions/checkout@v7.0.1
+      - uses: actions/checkout@v7
         with:
           persist-credentials: false
 
@@ -60,7 +60,7 @@ jobs:
       # so it also works with the read-only token of pull requests from forks.
       - name: Publish test results
         if: ${{ !cancelled() }}
-        uses: mikepenz/action-junit-report@v6.5.0
+        uses: mikepenz/action-junit-report@v6.6.1
         with:
           report_paths: "test-results/*.xml"
           annotate_only: true
@@ -72,7 +72,7 @@ jobs:
     runs-on: ubuntu-24.04
     timeout-minutes: 10
     steps:
-      - uses: actions/checkout@v7.0.1
+      - uses: actions/checkout@v7
         with:
           persist-credentials: false
 
