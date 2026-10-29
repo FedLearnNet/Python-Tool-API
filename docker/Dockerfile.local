@@ -1,0 +1,13 @@
+# Local development only: the published base-python-dep image with the Tool API of this checkout
+# instead of the PyPI release. Built by dev_scripts/build_local_docker_image.sh, never push it.
+ARG BASE_IMAGE=ghcr.io/fedlearnnet/python-tool-api/base-python-dep:latest
+FROM ${BASE_IMAGE}
+
+USER 0
+COPY fl_net_python_tool_api-*.whl /tmp/
+# --force-reinstall --no-deps: replace the release even if the version number is unchanged;
+# the second install only adds dependencies the local version needs on top
+RUN pip install --no-cache-dir --force-reinstall --no-deps /tmp/fl_net_python_tool_api-*.whl \
+ && pip install --no-cache-dir /tmp/fl_net_python_tool_api-*.whl \
+ && rm -f /tmp/fl_net_python_tool_api-*.whl
+USER nonroot
