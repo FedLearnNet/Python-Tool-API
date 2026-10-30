@@ -10,7 +10,7 @@ find = { include = ["pyfedappwrap*"] }
 
 [project]
 name = "FL-Net-Python-Tool-API"
-version = "0.7.15" # Maintainers only: do not change the version without permission, it triggers publishing and the Docker base images
+version = "0.7.15.dev" # Maintainers only: do not change the version without permission, it triggers publishing and the Docker base images
 description = "Python SDK and runtime for building FL-Net tools: local analyses, preprocessing, exports and federated learning apps"
 readme = "README.md"
 requires-python = ">=3.11"

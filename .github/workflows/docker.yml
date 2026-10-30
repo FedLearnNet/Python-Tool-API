@@ -18,6 +18,20 @@ on:
         description: Rebuild even if the images for this version already exist
         type: boolean
         default: false
+  # Develop images: publish.yml calls this from develop after it put the SDK on TestPyPI
+  workflow_call:
+    inputs:
+      version:
+        description: Image tag, the X.Y.Z.dev version of the repository
+        type: string
+        required: true
+      package-version:
+        description: Version of pyfedappwrap the images install, X.Y.Z.dev<run> on TestPyPI
+        type: string
+        required: true
+      testpypi:
+        type: boolean
+        default: false
 
 concurrency:
   group: docker-base-images
@@ -31,15 +45,20 @@ env:
   REGISTRY: ghcr.io/fedlearnnet/python-tool-api
   PYTHON_VERSION: "3.11"
   IMAGES: base-python base-python-dep base-r base-r-dep base-r-biocmanager base-r-dep-biocmanager code-transformer-runtime
+  # Develop images take pyfedappwrap from TestPyPI and move staging instead of latest, like the other FL-Net images
+  PYPI_JSON: ${{ inputs.testpypi && 'https://test.pypi.org/pypi' || 'https://pypi.org/pypi' }}
+  INDEX_URL: ${{ inputs.testpypi && 'https://test.pypi.org/simple/' || '' }}
+  MOVING_TAG: ${{ inputs.testpypi && 'staging' || 'latest' }}
 
 jobs:
   prepare:
-    if: github.ref == 'refs/heads/main'
+    if: github.ref == 'refs/heads/main' || inputs.testpypi
     runs-on: ubuntu-24.04
     timeout-minutes: 15
     outputs:
       build: ${{ steps.check.outputs.build }}
       version: ${{ steps.check.outputs.version }}
+      package_version: ${{ steps.check.outputs.package_version }}
       build_date: ${{ steps.check.outputs.build_date }}
     steps:
       - uses: actions/checkout@v5
@@ -58,10 +77,17 @@ jobs:
         id: check
         env:
           FORCE: ${{ inputs.force }}
+          INPUT_VERSION: ${{ inputs.version }}
+          INPUT_PACKAGE_VERSION: ${{ inputs.package-version }}
         run: |
-          version="$(python3 -c 'import tomllib; print(tomllib.load(open("pyproject.toml", "rb"))["project"]["version"])')"
-          echo "version=$version" >> "$GITHUB_OUTPUT"
-          echo "build_date=$(date -u +%Y-%m-%dT%H:%M:%SZ)" >> "$GITHUB_OUTPUT"
+          version="${INPUT_VERSION:-$(python3 -c 'import tomllib; print(tomllib.load(open("pyproject.toml", "rb"))["project"]["version"])')}"
+          {
+            echo "version=$version"
+            echo "package_version=${INPUT_PACKAGE_VERSION:-$version}"
+            echo "build_date=$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+          } >> "$GITHUB_OUTPUT"
+          # X.Y.Z.dev is a moving tag, always the newest develop build
+          case "$version" in *.dev) FORCE=true ;; esac
           # A new image in the chain is built for the current version as well
           missing=""
           for image in $IMAGES; do
@@ -75,18 +101,18 @@ jobs:
             echo "build=true" >> "$GITHUB_OUTPUT"
           fi
 
-      # The images install pyfedappwrap from PyPI (published from main by publish.yml), so the release has to be available first.
-      - name: Wait for the release on PyPI
+      # The images install pyfedappwrap from (Test)PyPI (published by publish.yml), so the release has to be available first.
+      - name: Wait for the release on (Test)PyPI
         if: steps.check.outputs.build == 'true'
         env:
-          VERSION: ${{ steps.check.outputs.version }}
+          VERSION: ${{ steps.check.outputs.package_version }}
         run: |
           for attempt in $(seq 1 20); do
-            curl -sf "https://pypi.org/pypi/FL-Net-Python-Tool-API/$VERSION/json" > /dev/null && exit 0
-            echo "pyfedappwrap $VERSION is not on PyPI yet ($attempt/20)"
+            curl -sf "$PYPI_JSON/FL-Net-Python-Tool-API/$VERSION/json" > /dev/null && exit 0
+            echo "pyfedappwrap $VERSION is not on $PYPI_JSON yet ($attempt/20)"
             sleep 30
           done
-          echo "::error::pyfedappwrap $VERSION is not published on PyPI"
+          echo "::error::pyfedappwrap $VERSION is not published on $PYPI_JSON"
           exit 1
 
   build:
@@ -116,6 +142,7 @@ jobs:
       - name: Build image chain
         env:
           VERSION: ${{ needs.prepare.outputs.version }}
+          PACKAGE_VERSION: ${{ needs.prepare.outputs.package_version }}
           BUILD_DATE: ${{ needs.prepare.outputs.build_date }}
           ARCH: ${{ matrix.arch }}
         run: |
@@ -129,11 +156,12 @@ jobs:
             shift 2
             echo "::group::$image"
             docker build \
-              --build-arg PYFEDAPPWRAP_VERSION="$VERSION" \
+              --build-arg PYFEDAPPWRAP_VERSION="$PACKAGE_VERSION" \
+              --build-arg PYFEDAPPWRAP_INDEX_URL="$INDEX_URL" \
               --build-arg PYTHON_VERSION="$PYTHON_VERSION" \
               --build-arg FEDDB_IMAGE_BUILD_DATE="$BUILD_DATE" \
               --label "org.opencontainers.image.source=$GITHUB_SERVER_URL/$GITHUB_REPOSITORY" \
-              --label "org.opencontainers.image.version=$VERSION" \
+              --label "org.opencontainers.image.version=$PACKAGE_VERSION" \
               "$@" \
               -f "$file" \
               -t "$REGISTRY/$image:$VERSION-$ARCH" \
@@ -176,7 +204,7 @@ jobs:
           for image in $IMAGES; do
             docker buildx imagetools create \
               -t "$REGISTRY/$image:$VERSION" \
-              -t "$REGISTRY/$image:latest" \
+              -t "$REGISTRY/$image:$MOVING_TAG" \
               "$REGISTRY/$image:$VERSION-amd64" \
               "$REGISTRY/$image:$VERSION-arm64"
           done
