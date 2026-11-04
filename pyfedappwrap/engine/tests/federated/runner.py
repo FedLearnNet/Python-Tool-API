@@ -32,6 +32,7 @@ from pyfedappwrap.engine.tests.federated.controller import FLNetInMemoryControll
     FLNetInMemoryControllerSession
 from pyfedappwrap.engine.tests.test_upload_client import TestUploadClient
 from pyfedappwrap.engine.worker.data_manager import get_data
+from pyfedappwrap.learning.model.saver import ModelSaver
 
 
 logger = logging.getLogger(__name__)
@@ -345,6 +346,7 @@ class LocalFederatedRunner:
             n_rounds = self._aggregator_round_count(participant)
         output_dir = self._participant_output_dir(participant)
         aggregated = None
+        aggregator_key = "default"
 
         n_relay_clients = len(communicator.client_ids)
         try:
@@ -397,9 +399,19 @@ class LocalFederatedRunner:
                     aggregated,
                     self._aggregator_output_filename(participant),
                 )
+            self._save_aggregator_model(aggregator_key, aggregated)
             return aggregated
         finally:
             communicator.unbind_notice_subject()
+
+    def _save_aggregator_model(self, aggregator_key: str, aggregated: Any) -> None:
+        aggregator = self._aggregators.get(aggregator_key)
+        if aggregator is None:
+            return
+        path_name = aggregator.save_model(aggregated)
+        if not path_name:
+            return
+        ModelSaver(self.upload_client, self.run_id, self.run_type).save(path_name, path_name)
 
     @staticmethod
     def _save_aggregated_result(result: Any, filename: str) -> None:

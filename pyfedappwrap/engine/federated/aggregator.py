@@ -14,3 +14,14 @@ class AppAggregator(ABC):
         Aggregate client payloads into a single result.
         """
         raise NotImplementedError
+
+    def save_model(self, aggregated: Any) -> Optional[str]:
+        """
+        Optionally persist the final round's aggregated result as a model file inside
+        ``system_settings.model_dir`` and return its file name so the engine can upload it.
+
+        ``aggregated`` is the value this aggregator's own ``aggregate()`` returned for the last
+        completed round - aggregators are otherwise stateless, so the engine cannot reconstruct it
+        on its own. Returning ``None`` (the default) means there is no model to upload.
+        """
+        return None

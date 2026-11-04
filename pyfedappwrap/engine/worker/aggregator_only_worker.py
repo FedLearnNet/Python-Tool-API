@@ -27,6 +27,7 @@ from pyfedappwrap.engine.runtime_lifecycle import EngineLifecycle
 from pyfedappwrap.engine.service.controller.aggregator import FLNetCommunicatorAggregator
 from pyfedappwrap.engine.service.socket.messages.app import AppTaskMessage, SendUpdateRunDTO
 from pyfedappwrap.engine.worker.run_dto import RunStatusTypes, UpdateTestRunDTO
+from pyfedappwrap.learning.model.saver import ModelSaver
 
 
 def extract_round_count(body: dict) -> int:
@@ -55,6 +56,7 @@ class AggregatorOnlyWorker:
         self.finish_event: Optional[threading.Event] = None
         self.task_queue: Optional[Queue] = None
         self.websocket_client = None
+        self.upload_client = None
         self.run_id = None
         self.run_type = RunType.NOT_DEFINED
         self._lifecycle: Optional[EngineLifecycle] = None
@@ -64,6 +66,7 @@ class AggregatorOnlyWorker:
     def set_startup(self, websocket_client, upload_client, app_id, run_id, run_type: RunType,
                     lifecycle: EngineLifecycle, stop_worker):
         self.websocket_client = websocket_client
+        self.upload_client = upload_client
         self.run_id = run_id
         self.run_type = run_type
         self._lifecycle = lifecycle
@@ -143,6 +146,8 @@ class AggregatorOnlyWorker:
         communicator = self._build_communicator(body)
         n_rounds = extract_round_count(body)
         n_relay_clients = len(communicator.client_ids)
+        aggregator_key = "default"
+        aggregated = None
         try:
             for round_nr in range(1, n_rounds + 1):
                 self.logger.info(
@@ -168,5 +173,15 @@ class AggregatorOnlyWorker:
                     from_aggregator=aggregator_key,
                 )
                 self.logger.info(f"[AGGREGATOR] round {round_nr} complete (comm_id={communication_id})")
+            self._save_model(aggregator_key, aggregated)
         finally:
             communicator.unbind_notice_subject()
+
+    def _save_model(self, aggregator_key: str, aggregated) -> None:
+        aggregator = self._aggregators.get(aggregator_key)
+        if aggregator is None:
+            return
+        path_name = aggregator.save_model(aggregated)
+        if not path_name:
+            return
+        ModelSaver(self.upload_client, self.run_id, self.run_type).save(path_name, path_name)
