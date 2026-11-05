@@ -164,11 +164,18 @@ class BaseApp(ABC, Generic[C, I, O]):
 
     def save(self):
         if self.tool_type and self.tool_type == AppType.ANALYSIS:
-            # Federated runs DO produce a final model (each participant primes its model with the
-            # aggregated global coefficients), so the trained model.joblib must be uploaded via
-            # upload_model_file just like a normal run. Only pure TEST_RUN has no model to persist.
+            # Only pure TEST_RUN has no model to persist at all.
             if self.run_type != RunType.TEST_RUN:
                 path_name = self._save()
+                # Federated runs DO produce a final model (each participant primes its model with
+                # the aggregated global coefficients), so it's saved locally here - a follow-up app
+                # in the same run can still access it - but it is NOT uploaded from here. Upload in
+                # a federated run happens exactly once, from the aggregator's own save_model() hook
+                # (platform aggregator -> global endpoint; coordinator clinic -> local-learning-api,
+                # which forwards it only if the model is public). Uploading it again per-participant
+                # here would create duplicate model versions.
+                if self.run_type == RunType.FEDERATED_RUN:
+                    return
                 if self.saver is not None:
                     self.saver.save(path_name, self.get_model_name())
                 else:

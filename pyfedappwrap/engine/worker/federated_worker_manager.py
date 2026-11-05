@@ -338,7 +338,6 @@ class FederatedWorkerManager(Observer):
 
             any_error: Optional[str] = None
             aggregator_output: Optional[dict[str, Any]] = None
-            client_output: Optional[dict[str, Any]] = None
             for participant in participants:
                 outcome = results.get(participant.participant_id)
                 if outcome is None:
@@ -352,16 +351,6 @@ class FederatedWorkerManager(Observer):
                         "aggregator_aggregatorId": participant.participant_id,
                         "aggregator_result": self._serializer.serialize(outcome.result),
                     }
-                elif (
-                    client_output is None
-                    and participant.role == FederatedParticipantType.CLIENT
-                    and outcome.success
-                    and outcome.result is not None
-                ):
-                    client_output = {
-                        "clientId": participant.participant_id,
-                        "result": self._serializer.serialize(outcome.result),
-                    }
                 if not outcome.success and any_error is None:
                     any_error = outcome.error
 
@@ -369,18 +358,6 @@ class FederatedWorkerManager(Observer):
                 reporter.finish_run(status="ERROR", error=any_error, output_data=aggregator_output)
             else:
                 reporter.finish_run(status="FINISHED", output_data=aggregator_output)
-
-            if client_output is not None and self.upload_client is not None:
-                combined = {**(aggregator_output or {}), **client_output}
-                try:
-                    self.upload_client.upload_output(
-                        RunType.FEDERATED_RUN, run_id, combined
-                    )
-                except Exception as upload_exc:
-                    logging.warning(
-                        "Federated run %s: HTTP output upload failed: %s",
-                        run_id, upload_exc,
-                    )
 
         except Exception as exc:
             logging.exception("Federated run %s crashed: %s", run_id, exc)

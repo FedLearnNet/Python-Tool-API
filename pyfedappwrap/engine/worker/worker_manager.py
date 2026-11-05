@@ -6,7 +6,6 @@ from uuid import uuid4
 
 from pyfedappwrap.engine.config.system_config import system_settings
 from pyfedappwrap.engine.enums.test_embed_states import WebsocketMessageTypes, RunType
-from pyfedappwrap.engine.federated.aggregator import AppAggregator
 from pyfedappwrap.engine.logger import WebSocketLogger
 from pyfedappwrap.engine.observer.observer import Observer
 from pyfedappwrap.engine.runtime_lifecycle import EngineLifecycle
@@ -14,17 +13,7 @@ from pyfedappwrap.engine.service.socket.messages.app import AppTaskMessage
 from pyfedappwrap.engine.service.socket.messages.base import BaseSocketMessage
 from pyfedappwrap.engine.service.socket.socket import WebSocketClient
 from pyfedappwrap.engine.service.upload.upload_client import UploadClient
-from pyfedappwrap.engine.worker.aggregator_only_worker import AggregatorOnlyWorker
 from pyfedappwrap.engine.worker.run_dto import RunStatusTypes
-
-
-def is_aggregator_only_task(task_body: dict) -> bool:
-    """True when Learning APIs explicitly marked this participant as aggregator-only - the
-    platform running as aggregator, with no data of its own - via the aggregatorOnly flag on
-    StartRunDTO (see FederatedRunEnricher.enrichWithFederatedRelay on the Java side). A
-    coordinator CLINIC that also trains is never marked this way, so it keeps going through the
-    normal registered-app path unaffected."""
-    return task_body.get("aggregatorOnly") is True
 
 
 class WorkerManager(Observer):
@@ -36,28 +25,17 @@ class WorkerManager(Observer):
         self.logger = WebSocketLogger("WorkerManager", self.websocket_client)
         self.worker = None
         self.available_worker = None
-        self._aggregators: dict[str, AppAggregator] = {}
         self.logger.info(f"WorkerManager initialized.")
 
-    def register_aggregator(self, aggregator: AppAggregator, key: str = "default") -> None:
-        self._aggregators[key] = aggregator
-
-    def set_aggregators(self, aggregators: dict[str, AppAggregator]) -> None:
-        self._aggregators = dict(aggregators)
-
-    def start_worker(self, run_id, run_type: RunType, task_body: dict | None = None):
+    def start_worker(self, run_id, run_type: RunType):
         if self.worker is not None:
             self.logger.error(f"Cannot start app, cause App is already running.")
             return
 
-        if task_body is not None and is_aggregator_only_task(task_body):
-            self.logger.info(f"Starting aggregator-only worker (no app registered worker needed).")
-            worker = AggregatorOnlyWorker(self._aggregators)
-        else:
-            if self.available_worker is None:
-                self.logger.error(f"No App registered.")
-                return
-            worker = copy.deepcopy(self.available_worker)
+        if self.available_worker is None:
+            self.logger.error(f"No App registered.")
+            return
+        worker = copy.deepcopy(self.available_worker)
 
         uuid = f"Run: {run_id}-{uuid4().__str__()}"
         worker.set_startup(self.websocket_client, self.upload_client, uuid, run_id, run_type,
@@ -106,11 +84,11 @@ class WorkerManager(Observer):
                     self.logger.error(f"Project startup is disabled.")
                     return
                 event_message = event.message
-                self.start_worker(event_message["id"], event.run_type, event_message)
+                self.start_worker(event_message["id"], event.run_type)
                 self.enqueue_task(AppTaskMessage(task=event.type, body=event.message))
             if WebsocketMessageTypes.START_PREDICTION.equals(event.type):
                 event_message = event.message
-                self.start_worker(event_message["id"], event.run_type, event_message)
+                self.start_worker(event_message["id"], event.run_type)
                 self.enqueue_task(AppTaskMessage(task=event.type, body=event.message))
         except Exception as e:
             if self.worker is not None:
