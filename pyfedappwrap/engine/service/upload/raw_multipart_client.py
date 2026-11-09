@@ -131,7 +131,7 @@ def post_output_raw_httpclient(
         data = resp.read()
         if resp.status >= 400:
             scheme = "https" if use_https else "http"
-            url = f"{scheme}://{host}:{port}{full_path}"
+            url = full_path if "://" in full_path else f"{scheme}://{host}:{port}{full_path}"
 
             logging.error(
                 "HTTP %s %s\nURL: %s\nHeaders: %s\nrunId=%s\nfields=%s\nResponse: %s",

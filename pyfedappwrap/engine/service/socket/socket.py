@@ -6,6 +6,7 @@ import traceback
 import websockets
 from pydantic import ValidationError
 
+from pyfedappwrap.engine.config.system_config import system_settings
 from pyfedappwrap.engine.events.internal_events import handle_internal_event
 from pyfedappwrap.engine.observer.subject import Subject
 from pyfedappwrap.engine.runtime_lifecycle import EngineLifecycle
@@ -31,6 +32,7 @@ class WebSocketClient(Subject, threading.Thread):
             logging.info("WebSocketClient initialized without authentication headers.")
 
         self.retry_interval = 5
+        self.close_code = None
 
     def run(self):
         asyncio.set_event_loop(self.loop)
@@ -56,6 +58,10 @@ class WebSocketClient(Subject, threading.Thread):
         while not self.lifecycle.is_stopping():
             try:
                 await self.connect()
+                if self.run_ended_by_server():
+                    logging.info("Server ended the run, stopping the engine")
+                    self.lifecycle.request_exit()
+                    break
             except websockets.ConnectionClosed:
                 logging.info("WebSocket connection closed, retrying...")
             except Exception as e:
@@ -77,6 +83,12 @@ class WebSocketClient(Subject, threading.Thread):
                                       max_size=None) as websocket:
             self.websocket = websocket
             await self.receive_messages()
+        self.close_code = websocket.close_code
+
+    def run_ended_by_server(self) -> bool:
+        # On the platform the server closes normally once the run ended: the app is done, and a reconnect
+        # would only meet its revoked key. A dev run keeps the engine for the next run.
+        return self.close_code == 1000 and not system_settings.dev_mode
 
     async def receive_messages(self):
         """Handle incoming WebSocket messages."""
