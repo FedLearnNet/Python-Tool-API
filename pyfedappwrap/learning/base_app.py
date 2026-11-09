@@ -166,17 +166,14 @@ class BaseApp(ABC, Generic[C, I, O]):
         if self.tool_type and self.tool_type == AppType.ANALYSIS:
             # Only pure TEST_RUN has no model to persist at all.
             if self.run_type != RunType.TEST_RUN:
+                # Store model locally as file
                 path_name = self._save()
-                # Federated runs DO produce a final model (each participant primes its model with
-                # the aggregated global coefficients), so it's saved locally here - a follow-up app
-                # in the same run can still access it - but it is NOT uploaded from here. Upload in
-                # a federated run happens exactly once, from the aggregator's own save_model() hook
-                # (platform aggregator -> global endpoint; coordinator clinic -> local-learning-api,
-                # which forwards it only if the model is public). Uploading it again per-participant
-                # here would create duplicate model versions.
+                # Upload the model
                 if self.run_type == RunType.FEDERATED_RUN:
+                    # Model upload is done by the aggregator for federated apps, skip
                     return
                 if self.saver is not None:
+                    # Upload the model file to the server if the saver is available
                     self.saver.save(path_name, self.get_model_name())
                 else:
                     self.logger.error(f"Failed to save model to {path_name} because saver is null")
