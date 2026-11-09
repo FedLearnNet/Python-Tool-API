@@ -32,6 +32,7 @@ from pyfedappwrap.engine.tests.federated.controller import FLNetInMemoryControll
     FLNetInMemoryControllerSession
 from pyfedappwrap.engine.tests.test_upload_client import TestUploadClient
 from pyfedappwrap.engine.worker.data_manager import get_data
+from pyfedappwrap.learning.model.saver import ModelSaver
 
 
 logger = logging.getLogger(__name__)
@@ -75,8 +76,12 @@ class LocalFederatedRunner:
                  lifecycle: EngineLifecycle | None = None,
                  reporter: FederatedStatusReporter | None = None,
                  run_id: int | None = None,
-                 run_type: RunType = RunType.FEDERATED_RUN):
+                 run_type: RunType = RunType.FEDERATED_RUN,
+                 round_source_app: Any = None):
         self.config = config
+        # App whose config type resolves the aggregator's round count when the aggregator has no
+        # training app of its own (aggregator-only participant).
+        self.round_source_app = round_source_app
         self.controller = None if self._uses_external_controller() else FLNetInMemoryController(config)
         if self.controller is None:
             logger.info(
@@ -341,6 +346,7 @@ class LocalFederatedRunner:
             n_rounds = self._aggregator_round_count(participant)
         output_dir = self._participant_output_dir(participant)
         aggregated = None
+        aggregator_key = "default"
 
         n_relay_clients = len(communicator.client_ids)
         try:
@@ -393,9 +399,19 @@ class LocalFederatedRunner:
                     aggregated,
                     self._aggregator_output_filename(participant),
                 )
+            self._save_aggregator_model(aggregator_key, aggregated)
             return aggregated
         finally:
             communicator.unbind_notice_subject()
+
+    def _save_aggregator_model(self, aggregator_key: str, aggregated: Any) -> None:
+        aggregator = self._aggregators.get(aggregator_key)
+        if aggregator is None:
+            return
+        path_name = aggregator.save_model(aggregated)
+        if not path_name:
+            return
+        ModelSaver(self.upload_client, self.run_id, self.run_type).save(path_name, path_name)
 
     @staticmethod
     def _save_aggregated_result(result: Any, filename: str) -> None:
@@ -532,8 +548,10 @@ class LocalFederatedRunner:
                 # Lock the aggregator's round count to the coordinator training app's resolved config
                 # so both loop the same number of rounds (the app gets federated_rounds from the
                 # dataclass default when hyper_params omits it; the raw-dict fallback would give 1).
-                agg_rounds = (self._resolve_rounds_from_app(coordinator_app, participant)
-                              if coordinator_app is not None else None)
+                # Without a coordinator app (aggregator-only) the registered app's config is used.
+                round_app = coordinator_app if coordinator_app is not None else self.round_source_app
+                agg_rounds = (self._resolve_rounds_from_app(round_app, participant)
+                              if round_app is not None else None)
                 threads.append(self._build_aggregator_thread(
                     participant, results, results_lock, bridge, agg_rounds))
                 if coordinator_app is not None:

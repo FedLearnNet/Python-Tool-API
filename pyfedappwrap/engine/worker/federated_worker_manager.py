@@ -296,8 +296,13 @@ class FederatedWorkerManager(Observer):
                 self._stage_input_files(participant)
                 # Clients train; the coordinator (AGGREGATOR) also trains on its own data in addition
                 # to running the aggregator, so it gets a training app too (the runner bridges its
-                # local update into the aggregation in-process).
-                if participant.role in (FederatedParticipantType.CLIENT, FederatedParticipantType.AGGREGATOR):
+                # local update into the aggregation in-process). An aggregator-only run (e.g. the
+                # platform as aggregator, which holds no data) gets no training app, so the runner
+                # only runs the aggregation loop for it.
+                aggregator_only = (run_dto.aggregator_only is True
+                                   and participant.role == FederatedParticipantType.AGGREGATOR)
+                if (participant.role in (FederatedParticipantType.CLIENT, FederatedParticipantType.AGGREGATOR)
+                        and not aggregator_only):
                     app = copy.deepcopy(self.available_app)
                     app.logger = WebSocketLogger(
                         f"FederatedParticipant[{participant.participant_id}]",
@@ -327,12 +332,12 @@ class FederatedWorkerManager(Observer):
                 reporter=reporter,
                 run_id=run_id,
                 run_type=RunType.FEDERATED_RUN,
+                round_source_app=self.available_app,
             )
             results = runner.run(apps_by_participant)
 
             any_error: Optional[str] = None
             aggregator_output: Optional[dict[str, Any]] = None
-            client_output: Optional[dict[str, Any]] = None
             for participant in participants:
                 outcome = results.get(participant.participant_id)
                 if outcome is None:
@@ -346,16 +351,6 @@ class FederatedWorkerManager(Observer):
                         "aggregator_aggregatorId": participant.participant_id,
                         "aggregator_result": self._serializer.serialize(outcome.result),
                     }
-                elif (
-                    client_output is None
-                    and participant.role == FederatedParticipantType.CLIENT
-                    and outcome.success
-                    and outcome.result is not None
-                ):
-                    client_output = {
-                        "clientId": participant.participant_id,
-                        "result": self._serializer.serialize(outcome.result),
-                    }
                 if not outcome.success and any_error is None:
                     any_error = outcome.error
 
@@ -363,18 +358,6 @@ class FederatedWorkerManager(Observer):
                 reporter.finish_run(status="ERROR", error=any_error, output_data=aggregator_output)
             else:
                 reporter.finish_run(status="FINISHED", output_data=aggregator_output)
-
-            if client_output is not None and self.upload_client is not None:
-                combined = {**(aggregator_output or {}), **client_output}
-                try:
-                    self.upload_client.upload_output(
-                        RunType.FEDERATED_RUN, run_id, combined
-                    )
-                except Exception as upload_exc:
-                    logging.warning(
-                        "Federated run %s: HTTP output upload failed: %s",
-                        run_id, upload_exc,
-                    )
 
         except Exception as exc:
             logging.exception("Federated run %s crashed: %s", run_id, exc)

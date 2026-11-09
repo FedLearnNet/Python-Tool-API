@@ -56,6 +56,7 @@ class FederatedTestRunCreateDTO(BaseModel):
         Optional[int], Field(default=None, alias="federatedAppVersionId")]
     federated_app_id: Annotated[Optional[int], Field(default=None, alias="federatedAppId")]
     start_aggregator: Annotated[Optional[bool], Field(default=None, alias="startAggregator")]
+    aggregator_only: Annotated[Optional[bool], Field(default=None, alias="aggregatorOnly")]
     total_rounds: Annotated[Optional[int], Field(default=None, alias="totalRounds")]
     config: Optional[FederatedRunConfigDTO] = None
     output_data: Annotated[Optional[dict[str, Any]], Field(default=None, alias="outputData")]

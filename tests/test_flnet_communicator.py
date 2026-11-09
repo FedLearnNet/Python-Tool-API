@@ -951,3 +951,64 @@ def test_local_runner_does_not_leak_observers_across_runs():
                 f"Observer leak: {len(runner.controller.notice_subject.observers)} "
                 f"observers still registered after run"
             )
+
+
+class _RecordingWsClient:
+    def __init__(self):
+        self.messages = []
+
+    def register(self, observer):
+        pass
+
+    def send(self, message):
+        self.messages.append(message)
+
+
+def test_federated_worker_aggregator_only_run_builds_no_training_app(monkeypatch, tmp_path):
+    from pyfedappwrap.engine.federated.models import FLNetLocalThreadResultDTO
+    from pyfedappwrap.engine.service.socket.messages.federated import FederatedTestRunCreateDTO
+    from pyfedappwrap.engine.worker import federated_worker_manager
+    from tests.apps.federated_client import FederatedMeanClientApp
+
+    monkeypatch.setattr(system_settings.fl_run, "controller_comm_url", "http://controller.local")
+    monkeypatch.setattr(system_settings, "output_dir", str(tmp_path))
+    monkeypatch.setattr(system_settings, "config_settings_path", "tests/configs/federated_app.yml")
+    captured: dict[str, Any] = {}
+
+    class _FakeRunner:
+        def __init__(self, config, **kwargs):
+            captured["config"] = config
+            captured["round_source_app"] = kwargs.get("round_source_app")
+
+        def run(self, apps_by_participant):
+            captured["apps"] = dict(apps_by_participant)
+            return {"platform": FLNetLocalThreadResultDTO(
+                participant_id="platform", success=True, result=np.array([1.0, 2.0]))}
+
+    monkeypatch.setattr(federated_worker_manager, "LocalFederatedRunner", _FakeRunner)
+    ws_client = _RecordingWsClient()
+    manager = FederatedWorkerManager(ws_client, EngineLifecycle())
+    registered_app = FederatedMeanClientApp()
+    manager.available_app = registered_app
+    run_dto = FederatedTestRunCreateDTO.model_validate({
+        "id": 7,
+        "startAggregator": True,
+        "aggregatorOnly": True,
+        "config": {
+            "channel": "channel-1",
+            "clientId": "platform",
+            "coordinatorId": "platform",
+            "orderClientIds": ["clinic-1", "clinic-2"],
+        },
+        "participants": [{"participantId": "platform", "role": "AGGREGATOR"}],
+    })
+
+    manager._run_federated(run_dto, RunType.FEDERATED_RUN)
+
+    assert captured["apps"] == {}
+    assert captured["round_source_app"] is registered_app
+    assert captured["config"].aggregator_id == "platform"
+    assert captured["config"].resolve_client_ids() == ["clinic-1", "clinic-2"]
+    finish = ws_client.messages[-1].message
+    assert finish.status == "FINISHED"
+    assert finish.output_data["aggregator_aggregatorId"] == "platform"

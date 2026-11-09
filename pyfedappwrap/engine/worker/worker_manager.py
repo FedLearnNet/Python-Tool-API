@@ -28,24 +28,25 @@ class WorkerManager(Observer):
         self.logger.info(f"WorkerManager initialized.")
 
     def start_worker(self, run_id, run_type: RunType):
+        if self.worker is not None:
+            self.logger.error(f"Cannot start app, cause App is already running.")
+            return
+
         if self.available_worker is None:
             self.logger.error(f"No App registered.")
             return
+        worker = copy.deepcopy(self.available_worker)
 
-        if self.worker is None:
-            worker = copy.deepcopy(self.available_worker)
-            uuid = f"Run: {run_id}-{uuid4().__str__()}"
-            worker.set_startup(self.websocket_client, self.upload_client, uuid, run_id, run_type,
-                               self.lifecycle,
-                               self.stop_worker)
-            self.worker = worker
+        uuid = f"Run: {run_id}-{uuid4().__str__()}"
+        worker.set_startup(self.websocket_client, self.upload_client, uuid, run_id, run_type,
+                           self.lifecycle,
+                           self.stop_worker)
+        self.worker = worker
 
-            # Start the worker in a separate thread
-            worker_thread = threading.Thread(target=worker.start_app, daemon=True)
-            worker_thread.start()
-            self.logger.info(f"App started.")
-        else:
-            self.logger.error(f"Cannot start app, cause App is already running.")
+        # Start the worker in a separate thread
+        worker_thread = threading.Thread(target=worker.start_app, daemon=True)
+        worker_thread.start()
+        self.logger.info(f"App started.")
 
     def stop_worker(self, error=None):
         if self.lifecycle.test_mode and error is not None:
