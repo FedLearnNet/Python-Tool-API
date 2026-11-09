@@ -1,7 +1,5 @@
 from __future__ import annotations
 
-import os
-from pathlib import Path
 from typing import Optional, List, Dict
 
 import pytest
@@ -11,11 +9,11 @@ from pyfedappwrap.engine.config.config import TabularSchemaDTO, ColumnRuleDTO, \
 from pyfedappwrap.engine.config.profile import FileProfile, ColumnProfile
 from pyfedappwrap.engine.validate.profiler import profile_table_from_path
 from pyfedappwrap.engine.validate.validate_table import validate_table_profile
+from tests import TEST_DATA_DIR
 
-ROOT_DIR = Path(os.path.abspath(os.curdir))
-IRIS_PATH = os.path.join(ROOT_DIR, 'data/iris_test.csv')
+IRIS_PATH = str(TEST_DATA_DIR / "iris_test.csv")
 
-NULL_POLICY_CSV_PATH = os.path.join(ROOT_DIR, "data/null_policy_test.csv")
+NULL_POLICY_CSV_PATH = str(TEST_DATA_DIR / "null_policy_test.csv")
 
 
 def generate_profile_for_iris() -> FileProfile:

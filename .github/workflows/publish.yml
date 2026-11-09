@@ -1,6 +1,6 @@
 name: Publish package
 
-# develop -> TestPyPI, main -> PyPI
+# develop -> TestPyPI plus base images tagged X.Y.Z.dev and staging, main -> PyPI
 on:
   push:
     branches: [main, develop]
@@ -19,9 +19,34 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
+  # Version from pyproject.toml, checked against the branch, see FedLearnNet/.github/actions/version
+  version:
+    if: github.ref == 'refs/heads/main' || github.ref == 'refs/heads/develop'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    outputs:
+      version: ${{ steps.version.outputs.version }}
+      package_version: ${{ steps.package.outputs.version }}
+    steps:
+      - uses: actions/checkout@v7.0.1
+        with:
+          persist-credentials: false
+      - id: version
+        uses: FedLearnNet/.github/actions/version@main
+      # Package indexes never take a version twice, so each X.Y.Z.dev build is uploaded as X.Y.Z.dev<run>.
+      # The repository and the image tags keep X.Y.Z.dev.
+      - id: package
+        env:
+          VERSION: ${{ steps.version.outputs.version }}
+        run: |
+          case "$VERSION" in
+            *.dev) echo "version=$VERSION$GITHUB_RUN_NUMBER" >> "$GITHUB_OUTPUT" ;;
+            *) echo "version=$VERSION" >> "$GITHUB_OUTPUT" ;;
+          esac
+
   build:
     name: Build package
-    if: github.ref == 'refs/heads/main' || github.ref == 'refs/heads/develop'
+    needs: version
     runs-on: ubuntu-24.04
     timeout-minutes: 10
     steps:
@@ -32,6 +57,11 @@ jobs:
       - uses: actions/setup-python@v7.0.0
         with:
           python-version: "3.11"
+
+      - name: Set package version
+        env:
+          PACKAGE_VERSION: ${{ needs.version.outputs.package_version }}
+        run: bash .github/scripts/version.sh set "$PACKAGE_VERSION"
 
       - name: Build sdist and wheel
         run: |
@@ -63,7 +93,7 @@ jobs:
           name: dist
           path: dist/
 
-      # The version only changes when pyproject.toml is bumped; existing versions are skipped
+      # A rerun of the same run has the same package version, which is skipped
       - uses: pypa/gh-action-pypi-publish@v1.14.2
         with:
           repository-url: https://test.pypi.org/legacy/
@@ -89,3 +119,17 @@ jobs:
       - uses: pypa/gh-action-pypi-publish@v1.14.2
         with:
           skip-existing: true
+
+  # All base images with the develop SDK, so tools try it before a release
+  docker-develop:
+    name: Develop base images
+    needs: [version, publish-testpypi]
+    uses: ./.github/workflows/docker.yml
+    with:
+      version: ${{ needs.version.outputs.version }}
+      package-version: ${{ needs.version.outputs.package_version }}
+      testpypi: true
+    permissions:
+      contents: read
+      packages: write
+      security-events: write

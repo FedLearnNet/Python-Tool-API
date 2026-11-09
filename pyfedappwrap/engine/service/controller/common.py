@@ -12,7 +12,7 @@ from pyfedappwrap.engine.config.defaults import DEFAULT_APP_COMM_TIMEOUT, AUTO_C
 from pyfedappwrap.engine.federated.reporter import FederatedStatusReporter
 from pyfedappwrap.engine.config.system_config import FLNetDPSettings, FLNetSMPCSettings, \
     system_settings
-from pyfedappwrap.engine.enums.test_embed_states import TestEmbedEnum
+from pyfedappwrap.engine.enums.test_embed_states import WebsocketMessageTypes
 from pyfedappwrap.engine.federated.errors import FLNetCommunicationError
 from pyfedappwrap.engine.federated.models import (
     FLNetDataNoticeDTO,
@@ -127,7 +127,7 @@ class FLNetCommunicator:
     def handle_notice_event(self, event: Any):
         if not isinstance(event, BaseSocketMessage):
             return
-        if not TestEmbedEnum.FEDERATED_DATA_NOTICE.equals(event.type):
+        if not WebsocketMessageTypes.FEDERATED_DATA_NOTICE.equals(event.type):
             return
 
         message = event.message

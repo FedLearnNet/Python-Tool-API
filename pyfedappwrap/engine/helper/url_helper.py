@@ -1,3 +1,4 @@
+from typing import Optional
 from urllib.parse import urlparse, urlunparse
 
 from pyfedappwrap.engine.config.system_config import system_settings
@@ -61,10 +62,12 @@ def remove_path_prefix(url: str, prefix: str) -> str:
     return _to_str(parsed)
 
 
-def get_request_header(token: str):
-    headers = {"Authorization": "Bearer " + token}
-
-    return headers
+def get_request_header(token: Optional[str]) -> dict[str, str]:
+    # Without a user token (API-key mode) no header is sent: file links carry their own secret, and the
+    # run's API key is only accepted on its callback endpoints.
+    if not token:
+        return {}
+    return {"Authorization": "Bearer " + token}
 
 def _to_str(v: str | bytes) -> str:
     return v.decode() if isinstance(v, bytes) else v

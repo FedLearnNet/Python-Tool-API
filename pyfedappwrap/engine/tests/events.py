@@ -2,7 +2,7 @@ import random
 
 from pyfedappwrap.engine.config.config_handler import load_config
 from pyfedappwrap.engine.config.system_config import system_settings
-from pyfedappwrap.engine.enums.test_embed_states import TestEmbedEnum, RunType
+from pyfedappwrap.engine.enums.test_embed_states import WebsocketMessageTypes, RunType
 from pyfedappwrap.engine.generator.generator import RandomTestGeneratorFactory
 from pyfedappwrap.engine.service.socket.messages.base import BaseSocketMessage
 
@@ -63,7 +63,7 @@ class TestEvents:
         body = self.get_base_body()
 
         return BaseSocketMessage(
-            type=TestEmbedEnum.START_PREDICTION,
+            type=WebsocketMessageTypes.START_PREDICTION,
             message=body,
             run_type=RunType.TEST_RUN
         )
@@ -72,7 +72,7 @@ class TestEvents:
         body = self.get_base_body()
         print("Using input files:", body["inputFilePaths"])
         return BaseSocketMessage(
-            type=TestEmbedEnum.START_RUN,
+            type=WebsocketMessageTypes.START_RUN,
             message=body,
             run_type=RunType.TEST_RUN
         )
@@ -124,7 +124,7 @@ class TestEvents:
             ],
         }
         return BaseSocketMessage(
-            type=TestEmbedEnum.START_FEDERATED_TEST_RUN,
+            type=WebsocketMessageTypes.START_FEDERATED_TEST_RUN,
             message=body,
             run_type=RunType.FEDERATED_TEST_RUN,
         )

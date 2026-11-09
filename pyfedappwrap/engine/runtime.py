@@ -1,4 +1,5 @@
 import os
+import signal
 import sys
 import threading
 from typing import Optional
@@ -23,8 +24,8 @@ from pyfedappwrap.engine.worker.federated_worker_manager import FederatedWorkerM
 from pyfedappwrap.engine.worker.worker_manager import WorkerManager
 from pyfedappwrap.learning.base_app import BaseApp
 from pyfedappwrap.learning.federated import BaseFederatedApp
-from pyfedappwrap.types.transformation.base_transformer import BaseTransformerAPP
-from pyfedappwrap.types.transformation.config_writer import write_transformer_config
+from pyfedappwrap.transformation.base_transformer import BaseTransformerAPP
+from pyfedappwrap.transformation.config.config_writer import write_transformer_config
 
 
 class FedDBEngine(threading.Thread):
@@ -143,6 +144,10 @@ class FedDBEngine(threading.Thread):
     def wait_until_stop(self):
         print("Engine is now running in the background.")
         print("Press Ctrl + C to stop the engine.")
+        # docker stop sends SIGTERM
+        # so the container was only killed after the stop timeout.
+        if threading.current_thread() is threading.main_thread():
+            signal.signal(signal.SIGTERM, lambda *_: self.stop())
         try:
             while not self.lifecycle.is_exiting():
                 # Avoid busy spinning and also detect unexpected thread death.

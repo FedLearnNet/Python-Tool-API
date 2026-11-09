@@ -1,0 +1,11 @@
+config:
+  hyperparams: []
+  input: []
+  output: []
+info:
+  longDescription: null
+  name: Code Transformer Runtime
+  shortDescription: Checks custom ETL transformation code against a goal data type
+  slug: code-transformer-runtime
+  sourceUrl: null
+  type: DATA_TRANSFORMATION

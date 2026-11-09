@@ -1,3 +1,4 @@
+from pyfedappwrap.engine.helper.url_helper import get_request_header
 from pyfedappwrap.engine.runtime_lifecycle import EngineLifecycle
 from pyfedappwrap.engine.service.socket.socket import WebSocketClient
 from pyfedappwrap.engine.service.upload.upload_client import UploadClient
@@ -39,3 +40,14 @@ def test_websocket_still_supports_user_oauth_without_api_key():
         }
     finally:
         client.loop.close()
+
+
+def test_download_header_is_empty_without_oauth():
+    assert get_request_header(None) == {}
+    assert get_request_header("") == {}
+
+
+def test_download_header_sends_user_oauth():
+    assert get_request_header("oauth-token") == {
+        "Authorization": "Bearer oauth-token",
+    }

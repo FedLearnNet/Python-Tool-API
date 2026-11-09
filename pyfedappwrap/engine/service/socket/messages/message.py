@@ -3,7 +3,7 @@ from typing import Annotated
 
 from pydantic import BaseModel, Field, ConfigDict
 
-from pyfedappwrap.engine.enums.test_embed_states import TestEmbedEnum, RunType
+from pyfedappwrap.engine.enums.test_embed_states import WebsocketMessageTypes, RunType
 from pyfedappwrap.engine.service.socket.messages.base import BaseSocketMessage, NOT_DEFINED_TYPE
 from pyfedappwrap.engine.service.socket.messages.monitor import ConsoleStdOutDTO
 
@@ -51,13 +51,13 @@ class TestRunMessageMetricDTO(RunMessageDTO):
 
 
 class SendMetricDTO(BaseSocketMessage[TestRunMessageMetricDTO]):
-    type: TestEmbedEnum = Field(default=TestEmbedEnum.LOG_METRIC, description="Type of the message")
+    type: WebsocketMessageTypes = Field(default=WebsocketMessageTypes.LOG_METRIC, description="Type of the message")
 
 class SendLogDTO(BaseSocketMessage[TestRunMessageLogDTO]):
-    type: TestEmbedEnum = Field(default=TestEmbedEnum.LOG_MESSAGE, description="Type of the message")
+    type: WebsocketMessageTypes = Field(default=WebsocketMessageTypes.LOG_MESSAGE, description="Type of the message")
 
 
 
 class SendConsoleMessage(BaseSocketMessage[ConsoleStdOutDTO]):
-    type: TestEmbedEnum = Field(default=TestEmbedEnum.CONSOLE_MESSAGE, description="Type of the message")
+    type: WebsocketMessageTypes = Field(default=WebsocketMessageTypes.CONSOLE_MESSAGE, description="Type of the message")
     run_type: RunType = NOT_DEFINED_TYPE

@@ -51,8 +51,12 @@ class WebSocketHandler(logging.Handler):
             run_id = self.run_id
             if run_id is None:
                 return  # Skip if no run_id is provided
-            message_txt = getattr(record, 'message', None) or record.msg
-            if message_txt is None:
+            # getMessage() always gives a string, record.msg may be any object, e.g. a DataFrame
+            try:
+                message_txt = record.getMessage()
+            except (TypeError, ValueError):
+                message_txt = str(record.msg)
+            if not message_txt:
                 return # Skip if no message is provided
             log = TestRunMessageLogDTO(
                 process=self.process_name or record.processName,
