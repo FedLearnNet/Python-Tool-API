@@ -85,7 +85,7 @@ class WorkerManager(Observer):
                     self.logger.error(f"Project startup is disabled.")
                     return
                 event_message = event.message
-                self.start_worker(event_message["id"], event.run_type, self.upload_client.for_execution(event_message))
+                self.start_worker(event_message["id"], event.run_type)
                 self.enqueue_task(AppTaskMessage(task=event.type, body=event.message))
 
         except Exception as e:
