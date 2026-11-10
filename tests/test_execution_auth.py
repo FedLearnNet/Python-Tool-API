@@ -45,7 +45,11 @@ def test_bootstrap_requires_user_auth_and_keeps_api_prefix(monkeypatch):
     assert post.call_args.kwargs["allow_redirects"] is False
 
 
-def test_local_login_bootstraps_and_saves_an_app_key_once(monkeypatch, tmp_path):
+@pytest.mark.parametrize("http_url,auth_url", [
+    ("http://backend/api/testembed/", None),
+    ("http://backend/api/execution/APP/", "http://auth/api/testembed/"),
+])
+def test_local_login_bootstraps_and_saves_an_app_key_once(monkeypatch, tmp_path, http_url, auth_url):
     from dotenv import dotenv_values
 
     env_file = tmp_path / ".env"
@@ -55,7 +59,8 @@ def test_local_login_bootstraps_and_saves_an_app_key_once(monkeypatch, tmp_path)
     monkeypatch.setattr(system_settings, "app_api_key", None)
     monkeypatch.setattr(system_settings, "app_key", None)
     monkeypatch.setattr(system_settings, "dev_mode", True)
-    monkeypatch.setattr(system_settings, "http_url", "http://backend/api/testembed/")
+    monkeypatch.setattr(system_settings, "http_url", http_url)
+    monkeypatch.setattr(system_settings, "auth_url", auth_url)
     monkeypatch.setattr(system_settings, "ws_url", "ws://backend/api/testembed/")
     login = Mock(return_value="oauth-token")
     post = Mock(return_value=response(payload={"apiKey": "app-key"}))
@@ -65,14 +70,20 @@ def test_local_login_bootstraps_and_saves_an_app_key_once(monkeypatch, tmp_path)
     first = execution_auth.authenticate_execution()
     second = execution_auth.authenticate_execution()
 
-    assert first == ("oauth-token", "app-key", "http://backend/api/testembed/", "ws://backend/api/testembed/")
-    assert second == (None, "app-key", "http://backend/api/testembed/", "ws://backend/api/testembed/")
+    assert first == ("oauth-token", "app-key", http_url, "ws://backend/api/testembed/")
+    assert second == (None, "app-key", http_url, "ws://backend/api/testembed/")
     login.assert_called_once()
     post.assert_called_once()
-    assert post.call_args.args == ("http://backend/api/testembed/7/credential",)
+    assert post.call_args.args == (f"{auth_url or http_url}7/credential",)
     assert post.call_args.kwargs["headers"] == {"Authorization": "Bearer oauth-token"}
     assert dotenv_values(env_file) == {"APP_ID": "7", "OTHER_SETTING": "preserved", "APP_API_KEY": "app-key"}
     assert env_file.stat().st_mode & 0o777 == 0o600
+
+    root = upload_client.UploadClient(first[0], first[1], base_url=first[2])
+    worker = root.for_execution({"id": 100, "executionId": 42, "executionApiKey": "attempt-key"})
+    worker.upload_output(RunType.TEST_RUN, 100, {"score": 0.7})
+    assert post.call_args.args == ("http://backend/api/execution/APP/42/upload/output",)
+    assert post.call_args.kwargs["headers"] == {"X-API-Key": "attempt-key"}
 
 
 def test_rejected_local_bootstrap_does_not_save_a_key(monkeypatch, tmp_path):
@@ -80,11 +91,28 @@ def test_rejected_local_bootstrap_does_not_save_a_key(monkeypatch, tmp_path):
     monkeypatch.setitem(system_settings.model_config, "env_file", str(env_file))
     monkeypatch.setattr(system_settings, "app_api_key", None)
     monkeypatch.setattr(system_settings, "app_key", "oauth-token")
+    monkeypatch.setattr(system_settings, "auth_url", "http://auth/api/testembed/")
     monkeypatch.setattr(system_settings, "http_url", "http://backend/testembed/")
     monkeypatch.setattr(execution_auth.requests, "post", Mock(return_value=response(403)))
     with pytest.raises(requests.HTTPError):
         execution_auth.authenticate_execution()
     assert not env_file.exists()
+
+
+def test_saved_key_skips_auth_url_and_preserves_separate_upload_and_socket_urls(monkeypatch):
+    monkeypatch.setattr(system_settings, "app_api_key", "app-key")
+    monkeypatch.setattr(system_settings, "app_key", None)
+    monkeypatch.setattr(system_settings, "auth_url", "http://auth/api/testembed/")
+    monkeypatch.setattr(system_settings, "http_url", "http://uploads/api/execution/APP/")
+    monkeypatch.setattr(system_settings, "ws_url", "ws://socket/api/testembed/")
+    post = Mock()
+    login = Mock()
+    monkeypatch.setattr(execution_auth.requests, "post", post)
+    monkeypatch.setattr(execution_auth.KeycloakClient, "get_token", login)
+    assert execution_auth.authenticate_execution() == (
+        None, "app-key", "http://uploads/api/execution/APP/", "ws://socket/api/testembed/")
+    post.assert_not_called()
+    login.assert_not_called()
 
 
 def test_explicit_key_takes_precedence_over_oauth(monkeypatch):
@@ -249,7 +277,8 @@ def test_start_credential_is_owned_by_the_worker_upload_client(monkeypatch, capl
 
 
 @pytest.mark.parametrize("test_mode", [False, True])
-def test_runtime_bootstrap_and_standalone_mock_mode(monkeypatch, test_mode):
+@pytest.mark.parametrize("auth_url", [None, "http://auth/api/execution/APP/"])
+def test_runtime_bootstrap_and_standalone_mock_mode(monkeypatch, test_mode, auth_url):
     from pyfedappwrap.engine import runtime
 
     monkeypatch.setattr(runtime, "RandomTestGeneratorFactory", Mock())
@@ -257,6 +286,7 @@ def test_runtime_bootstrap_and_standalone_mock_mode(monkeypatch, test_mode):
 
     monkeypatch.setattr(system_settings, "app_api_key", None)
     monkeypatch.setattr(system_settings, "app_key", "user-token")
+    monkeypatch.setattr(system_settings, "auth_url", auth_url)
     monkeypatch.setattr(system_settings, "http_url", "http://backend/execution/workflow/")
     monkeypatch.setattr(system_settings, "ws_url", "ws://backend/execution/workflow/")
     monkeypatch.setattr(system_settings, "app_id", "42")
@@ -277,6 +307,7 @@ def test_runtime_bootstrap_and_standalone_mock_mode(monkeypatch, test_mode):
             assert engine.ws_client.additional_headers == {"X-API-Key": "execution-key"}
             assert engine.upload_client.form_headers == engine.ws_client.additional_headers
             post.assert_called_once()
+            assert post.call_args.args == (f"{auth_url or 'http://backend/execution/APP/'}42/credential",)
         finally:
             engine.ws_client.loop.close()
 

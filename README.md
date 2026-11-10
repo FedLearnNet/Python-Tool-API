@@ -41,6 +41,18 @@ pytest
 
 Local settings go into `.env` (template: `.env.example`).
 
+For a local TestEmbed engine, configure API-key bootstrap separately from execution uploads:
+
+```dotenv
+APP_ID=12
+WS_URL=ws://localhost:8080/testembed/
+HTTP_URL=http://localhost:8080/execution/APP/
+AUTH_URL=http://localhost:8080/testembed/
+```
+
+After OAuth login, the engine requests `/testembed/12/credential` in this example and saves the returned `APP_API_KEY` in `.env`.
+Each run uploads with its own execution ID and key. If `AUTH_URL` is unset, bootstrap uses `HTTP_URL`.
+
 ### Develop builds
 
 `develop` carries the next version as `X.Y.Z.dev` (`.github/scripts/version.sh`), like all FL-Net repositories.

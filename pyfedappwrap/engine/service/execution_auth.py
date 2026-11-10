@@ -17,10 +17,10 @@ def authenticate_execution():
         token = token or KeycloakClient().get_token()
         if not token:
             raise ValueError("Execution authentication failed")
-        development = urlsplit(http_url).path.rstrip("/").endswith("/testembed")
+        development = urlsplit(ws_url).path.rstrip("/").endswith("/testembed")
         if not development:
             http_url, ws_url = execution_base_url(http_url), execution_base_url(ws_url)
-        api_key = bootstrap_execution(http_url, system_settings.app_id, token)
+        api_key = bootstrap_execution(system_settings.auth_url or http_url, system_settings.app_id, token)
         if development:
             set_key(system_settings.model_config["env_file"], "APP_API_KEY", api_key)
             system_settings.app_api_key = api_key

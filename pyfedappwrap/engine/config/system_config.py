@@ -93,6 +93,7 @@ class Settings(BaseSettings):
 
     ws_url: str = Field(default="ws://localhost:8080/testembed/")
     http_url: str = Field(default="http://localhost:8080/testembed/")
+    auth_url: Optional[str] = Field(default=None)
     url_prefix_remove: str = Field(default="api")
 
     ws_path: str = Field(default="/app")
