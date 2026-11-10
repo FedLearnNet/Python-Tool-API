@@ -4,7 +4,6 @@ on:
   push:
     branches: [main]
     paths:
-      - "pyproject.toml"
       - "docker/Dockerfile.base-chainguard"
       - "docker/Dockerfile.base-r-chainguard"
       - "docker/Dockerfile.base-r-cluster-chainguard"
@@ -18,15 +17,15 @@ on:
         description: Rebuild even if the images for this version already exist
         type: boolean
         default: false
-  # Develop images: publish.yml calls this from develop after it put the SDK on TestPyPI
+  # publish.yml calls this after it put the SDK on PyPI (main) or TestPyPI (develop)
   workflow_call:
     inputs:
       version:
-        description: Image tag, the X.Y.Z.dev version of the repository
+        description: Image tag, X.Y.Z on main, X.Y.Z.dev on develop
         type: string
         required: true
       package-version:
-        description: Version of pyfedappwrap the images install, X.Y.Z.dev<run> on TestPyPI
+        description: Version of pyfedappwrap the images install, X.Y.Z on PyPI or X.Y.Z.dev<run> on TestPyPI
         type: string
         required: true
       testpypi:
