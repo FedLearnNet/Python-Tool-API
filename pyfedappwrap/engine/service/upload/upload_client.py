@@ -1,13 +1,16 @@
-import logging
+import json
+import mimetypes
 from abc import ABC, abstractmethod
+from contextlib import ExitStack
 from pathlib import Path
 from typing import Any, Optional
-from urllib.parse import urlparse
 
 import requests
 
 from pyfedappwrap.engine.config.system_config import system_settings
-from pyfedappwrap.engine.service.upload.raw_multipart_client import post_output_raw_httpclient
+from pyfedappwrap.engine.service.execution_auth import (
+    authentication_headers, execution_base_url,
+)
 
 
 class AbstractUploadClient(ABC):
@@ -16,6 +19,9 @@ class AbstractUploadClient(ABC):
     @abstractmethod
     def __init__(self, token: Optional[str], api_key: Optional[str] = None):
         self.token = token
+
+    def for_execution(self, start):
+        return self
 
     @abstractmethod
     def upload_model_file(self, run_id: int, name: str, file_path: str) -> requests.Response:
@@ -46,123 +52,71 @@ class AbstractUploadClient(ABC):
 
 
 class UploadClient(AbstractUploadClient):
-    def __init__(self, token: Optional[str], api_key: Optional[str] = None):
+    def __init__(self, token: Optional[str], api_key: Optional[str] = None, *,
+                 base_url=None, app_id=None, run_id=None):
         """
         Initialize the UploadClient.
 
         :param token: Optional OAuth token for user-authenticated calls.
         """
-        self.base_url = system_settings.http_url
-        self.app_id = system_settings.app_id
+        self.base_url = base_url or system_settings.http_url
+        self.app_id = system_settings.app_id if app_id is None else app_id
+        self.run_id = self.app_id if run_id is None else run_id
         self.token = token
-        self.headers = {
-            "Authorization": f"Bearer {token}",
-            "Content-Type": "application/json",
-        }
-        self.form_headers = {
-            "Authorization": f"Bearer {token}",
-            # "Content-Type": "multipart/form-data",
-        }
-        if token is None or token == "":
-            self.headers = {
-                "Content-Type": "application/json",
-            }
-            self.form_headers = {}
-        if api_key:
-            self.headers["X-API-Key"] = api_key
-            self.form_headers["X-API-Key"] = api_key
+        self.api_key = api_key
+        self.form_headers = authentication_headers(token, api_key)
 
-        self.logger = logging.getLogger(__name__)
-        logging.basicConfig(level=logging.INFO)
+    def for_execution(self, start):
+        api_key = start.pop("executionApiKey", None)
+        execution_id = start.pop("executionId", None)
+        if api_key is None:
+            return self
+        if execution_id is None:
+            raise ValueError("Execution identity is required")
+        return UploadClient(self.token, api_key, base_url=execution_base_url(self.base_url),
+                            app_id=execution_id, run_id=start["id"])
+
+    def _upload(self, kind, run_id, files, data=None, params=None):
+        if not self.api_key:
+            raise ValueError("Execution credential is required")
+        if int(run_id) >= 0 and int(run_id) != int(self.run_id):
+            raise ValueError("Upload belongs to another execution")
+        response = requests.post(
+            f"{self.base_url}{self.app_id}/{system_settings.http_upload_path}/{kind}",
+            data={"runId": str(run_id if int(run_id) < 0 else self.app_id), **(data or {})},
+            files=files, params=params, headers=self.form_headers,
+            timeout=(5, 120), allow_redirects=False,
+        )
+        response.raise_for_status()
+        if response.status_code >= 300:
+            raise requests.HTTPError("Execution upload was redirected", response=response)
+        return response
 
     def upload_model_file(self, run_id: int, name: str, file_path: str) -> requests.Response:
         """
         Upload model via MULTIPART_FORM_DATA to match:
         ModelSubDataDTO { runId, name, filePath, file }
         """
-        url = f"{self.base_url}{self.app_id}/{system_settings.http_upload_path}/model"
-        self.logger.info(f"Uploading model to {url}")
         p = Path(file_path)
-        if not p.exists():
-            raise FileNotFoundError(f"Model file does not exist: {file_path}")
-
-        data = {
-            "runId": str(run_id),
-            "name": name,
-            "filePath": str(p),
-        }
-
         with p.open("rb") as f:
-            files = {
-                "file": (p.name, f, "application/octet-stream")
-            }
-            try:
-                response = requests.post(
-                    url,
-                    data=data,
-                    files=files,
-                    headers=self.form_headers,
-                    timeout=(5, 120),  # connect, read
-                )
-                response.raise_for_status()
-                self.logger.info(f"Successfully uploaded model to {url}")
-            except requests.exceptions.RequestException as e:
-                self.logger.error(f"Failed to upload model to {url}: {e}")
-                raise
-
-        return response
+            return self._upload("model", run_id, {"file": (p.name, f, "application/octet-stream")},
+                                data={"name": name, "filePath": str(p)})
 
     def upload_output(self, run_type, run_id: int,
                       output: dict[str, Any],
                       meta: Optional[dict[str, Any]] = None) -> requests.Response:
 
-        fields: dict[str, Any] = {}
-        file_paths: list[tuple[str, Path]] = []
-
-        for key, value in output.items():
-            if isinstance(value, Path) and value.exists():
-                if value.exists():
-                    file_paths.append((key, value))
-                else:
-                    self.logger.error(f"File for output key '{key}' does not exist: {value}")
+        fields = {}
+        with ExitStack() as stack:
+            files = []
+            for key, value in output.items():
+                if isinstance(value, Path) and value.exists():
+                    content_type = mimetypes.guess_type(value.name)[0] or "application/octet-stream"
+                    files.append(("files", (value.name, stack.enter_context(value.open("rb")), content_type,
+                                             {"X-Key": key, "X-Name": value.name})))
+                elif value is not None:
                     fields[key] = str(value)
-            elif value is not None:
-                fields[key] = str(value)
-
-        url = f"{self.base_url}{self.app_id}/{system_settings.http_upload_path}/output"
-        parsed = urlparse(self.base_url if "://" in self.base_url else f"http://{self.base_url}")
-        use_https = parsed.scheme == "https"
-        host = parsed.hostname or "localhost"
-        port = parsed.port or (443 if use_https else 80)
-
-        headers = dict(getattr(self, "form_headers", {}) or {})
-        headers.pop("Content-Type", None)
-        headers.pop("content-type", None)
-
-        status, reason, body = post_output_raw_httpclient(
-            host=host,
-            port=port,
-            use_https=use_https,
-            path=url,
-            run_id=run_id,
-            run_type=str(run_type.value),
-            fields=fields,
-            file_paths=file_paths,
-            headers=headers,
-            timeout=120,
-            meta=meta,
-        )
-
-        resp = requests.Response()
-        resp.status_code = status
-        resp._content = body
-        resp.reason = reason
-        resp.url = url
-
-        resp.headers["Content-Type"] = "application/octet-stream"
-
-        if status >= 400:
-            resp.raise_for_status()
-
-        self.logger.info("Successfully uploaded output to %s", resp.url)
-        return resp
+            files.append(("fields", (None, json.dumps(fields), "application/json")))
+            if meta:
+                files.append(("meta", (None, json.dumps(meta), "application/json")))
+            return self._upload("output", run_id, files, params={"runType": run_type.value})

@@ -1,4 +1,4 @@
-import os
+from pathlib import Path
 import base64
 import hashlib
 import secrets
@@ -34,35 +34,22 @@ def generate_code_challenge(code_verifier: str) -> str:
 
 class CallbackHandler(BaseHTTPRequestHandler):
     def do_GET(self):
-        query = urlparse(self.path).query
-        params = parse_qs(query)
+        params = parse_qs(urlparse(self.path).query)
+        code = params.get("code", [""])[0]
+        state = params.get("state", [""])[0]
+        valid = bool(code and state and secrets.compare_digest(state, self.server.auth_state))
+        self.server.auth_code = code if valid else None
+        self.send_response(200 if valid else 400)
+        self.send_header("Content-type", "text/html")
+        self.end_headers()
+        self.open_file_response("success.html" if valid else "fail.html")
 
-        if "code" in params:
-            logger.info("[CallbackHandler] Received auth code")
-            self.server.auth_code = params["code"][0]
-
-            self.send_response(200)
-            self.send_header("Content-type", "text/html")
-            self.end_headers()
-
-            self.open_file_response("success.html")
-        else:
-            logger.error("[CallbackHandler] Authentication error: %s", params)
-            self.server.auth_code = None
-
-            self.send_response(400)
-            self.send_header("Content-type", "text/html")
-            self.end_headers()
-
-            self.open_file_response("fail.html")
+    def log_message(self, format, *args):
+        # The callback URL contains an authorization code; never write it to the access log.
+        return
 
     def open_file_response(self, file_name):
-        script_dir = os.path.dirname(os.path.abspath(__file__))
-        file_path = os.path.join(script_dir, file_name)
-
-        with open(file_path, "r", encoding="utf-8") as file:
-            html_content = file.read()
-            self.wfile.write(html_content.encode("utf-8"))
+        self.wfile.write(Path(__file__).with_name(file_name).read_bytes())
 
 
 class KeycloakClient:
@@ -73,6 +60,7 @@ class KeycloakClient:
         self.server_port = system_settings.keycloak.server_port
 
         self.code_verifier = None
+        self.auth_state = None
 
     def get_token(self):
         auth_code = self._get_auth_code()
@@ -81,11 +69,11 @@ class KeycloakClient:
             logger.error("Authentication error")
             return None
 
-        token = self._exchange_code_for_token(auth_code)
-        return token
+        return self._exchange_code_for_token(auth_code)
 
     def _get_auth_code(self):
         self.code_verifier = generate_code_verifier()
+        self.auth_state = secrets.token_urlsafe(32)
         code_challenge = generate_code_challenge(self.code_verifier)
 
         auth_url = f"{self.keycloak_url}/protocol/openid-connect/auth?" + urlencode({
@@ -95,15 +83,16 @@ class KeycloakClient:
             "scope": "openid",
             "code_challenge": code_challenge,
             "code_challenge_method": "S256",
+            "state": self.auth_state,
         })
 
-        webbrowser.open(auth_url)
-
-        server = HTTPServer(("localhost", self.server_port), CallbackHandler)
-        server.auth_code = None
-        server.handle_request()
-
-        return server.auth_code
+        with HTTPServer(("localhost", self.server_port), CallbackHandler) as server:
+            server.auth_code = None
+            server.auth_state = self.auth_state
+            server.timeout = 180
+            webbrowser.open(auth_url)
+            server.handle_request()
+            return server.auth_code
 
     def _exchange_code_for_token(self, auth_code):
         token_url = f"{self.keycloak_url}/protocol/openid-connect/token"
@@ -116,7 +105,7 @@ class KeycloakClient:
             "code_verifier": self.code_verifier,
         }
 
-        response = requests.post(token_url, data=data)
+        response = requests.post(token_url, data=data, timeout=(5, 30), allow_redirects=False)
 
         if response.status_code == 200:
             token_response = response.json()
@@ -125,5 +114,5 @@ class KeycloakClient:
             logger.info("Access token retrieved successfully")
             return access_token
 
-        logger.error("Error retrieving token: %s", response.text)
+        logger.error("Error retrieving token: HTTP %s", response.status_code)
         return None

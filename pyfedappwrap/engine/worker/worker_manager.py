@@ -77,21 +77,19 @@ class WorkerManager(Observer):
             self.logger.error(f"App not started. Cannot start task: {task}")
 
     def update(self, event: BaseSocketMessage):
-        self.logger.info(f"Received event: {event}")
+        self.logger.info(f"Received event: {event.type}")
         try:
-            if WebsocketMessageTypes.START_RUN.equals(event.type):
-                if not system_settings.enable_project_startup and event.run_type == RunType.PROJECT_RUN:
+            if event.type in (WebsocketMessageTypes.START_RUN, WebsocketMessageTypes.START_PREDICTION):
+                if (event.type == WebsocketMessageTypes.START_RUN
+                        and not system_settings.enable_project_startup and event.run_type == RunType.PROJECT_RUN):
                     self.logger.error(f"Project startup is disabled.")
                     return
                 event_message = event.message
-                self.start_worker(event_message["id"], event.run_type)
+                self.start_worker(event_message["id"], event.run_type, self.upload_client.for_execution(event_message))
                 self.enqueue_task(AppTaskMessage(task=event.type, body=event.message))
-            if WebsocketMessageTypes.START_PREDICTION.equals(event.type):
-                event_message = event.message
-                self.start_worker(event_message["id"], event.run_type)
-                self.enqueue_task(AppTaskMessage(task=event.type, body=event.message))
+
         except Exception as e:
             if self.worker is not None:
                 self.worker.update_status(RunStatusTypes.ERROR, str(e))
-            self.logger.error(f"Error in workermanager manage server calls: {event} error {e}")
+            self.logger.error(f"Error in workermanager manage server calls: {event.type} error {e}")
             traceback.print_exc()

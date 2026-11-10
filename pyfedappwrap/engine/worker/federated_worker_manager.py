@@ -80,15 +80,13 @@ class FederatedWorkerManager(Observer):
             logging.exception("Failed to start federated run: %s", exc)
 
     def _handle_start(self, message: Any, *, run_type: Any) -> None:
-        if isinstance(message, FederatedTestRunCreateDTO):
-            run_dto = message
-        elif isinstance(message, dict):
-            run_dto = FederatedTestRunCreateDTO.model_validate(message)
-        elif hasattr(message, "model_dump"):
-            run_dto = FederatedTestRunCreateDTO.model_validate(message.model_dump(by_alias=True))
-        else:
+        if hasattr(message, "model_dump"):
+            message = message.model_dump(by_alias=True)
+        if not isinstance(message, dict):
             logging.warning("Unexpected federated start payload type: %s", type(message))
             return
+        upload_client = self.upload_client.for_execution(message) if self.upload_client else None
+        run_dto = FederatedTestRunCreateDTO.model_validate(message)
 
         with self._lock:
             if run_dto.id in self._active_runs and self._active_runs[run_dto.id].is_alive():
@@ -98,7 +96,7 @@ class FederatedWorkerManager(Observer):
         thread = threading.Thread(
             target=self._run_federated,
             name=f"fed-run-{run_dto.id}",
-            args=(run_dto, run_type),
+            args=(run_dto, run_type, upload_client),
             daemon=True,
         )
         with self._lock:
@@ -239,7 +237,8 @@ class FederatedWorkerManager(Observer):
         )
         return config
 
-    def _run_federated(self, run_dto: FederatedTestRunCreateDTO, run_type: Any) -> None:
+    def _run_federated(self, run_dto: FederatedTestRunCreateDTO, run_type: Any, upload_client=None) -> None:
+        upload_client = upload_client or self.upload_client
         run_id = run_dto.id
         reporter = FederatedStatusReporter(self.ws_client, run_id)
         reporter.update_run(status="STARTED", current_round=0)
@@ -327,7 +326,7 @@ class FederatedWorkerManager(Observer):
                 config,
                 aggregators=self._aggregators,
                 ws_client=self.ws_client,
-                upload_client=getattr(self, "upload_client", None),
+                upload_client=upload_client,
                 lifecycle=self.lifecycle,
                 reporter=reporter,
                 run_id=run_id,
@@ -336,8 +335,17 @@ class FederatedWorkerManager(Observer):
             )
             results = runner.run(apps_by_participant)
 
-            any_error: Optional[str] = None
             aggregator_output: Optional[dict[str, Any]] = None
+            outcome = results.get(config.aggregator_id)
+            if outcome is not None and outcome.success and outcome.result is not None:
+                aggregator_output = {
+                    "aggregator_aggregatorId": config.aggregator_id,
+                    "aggregator_result": self._serializer.serialize(outcome.result),
+                }
+                if upload_client is not None:
+                    upload_client.upload_output(run_type, run_id, aggregator_output)
+
+            any_error: Optional[str] = None
             for participant in participants:
                 outcome = results.get(participant.participant_id)
                 if outcome is None:
@@ -346,11 +354,6 @@ class FederatedWorkerManager(Observer):
                     participant.participant_id,
                     status="FINISHED" if outcome.success else "ERROR",
                 )
-                if participant.participant_id == config.aggregator_id and outcome.success and outcome.result is not None:
-                    aggregator_output = {
-                        "aggregator_aggregatorId": participant.participant_id,
-                        "aggregator_result": self._serializer.serialize(outcome.result),
-                    }
                 if not outcome.success and any_error is None:
                     any_error = outcome.error
 

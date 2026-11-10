@@ -12,7 +12,7 @@ from pyfedappwrap.engine.helper.banner import print_banner
 from pyfedappwrap.engine.helper.files_helper import ensure_system_directories
 from pyfedappwrap.engine.logger import WebSocketLogger, WebSocketConsoleHandler
 from pyfedappwrap.engine.runtime_lifecycle import EngineLifecycle
-from pyfedappwrap.engine.service.keycloak.keycloak import KeycloakClient
+from pyfedappwrap.engine.service.execution_auth import authenticate_execution
 from pyfedappwrap.engine.service.socket.socket import WebSocketClient
 from pyfedappwrap.engine.service.upload.upload_client import UploadClient
 from pyfedappwrap.engine.tests.test_socket import TestSocketClient
@@ -36,27 +36,17 @@ class FedDBEngine(threading.Thread):
             self.lifecycle.test_mode = test_mode
         else:
             self.lifecycle.test_mode = system_settings.test_mode
-        self.api_key = system_settings.app_api_key
-        if system_settings.app_key is not None:
-            self.token = system_settings.app_key
-        elif self.api_key is not None:
-            self.token = None
-        elif self.lifecycle.test_mode:
-            self.token = "TEST_MODE_TOKEN"
-        else:
-            self.token = KeycloakClient().get_token()
-        # Initialize WebSocketClient, FileWatcher, and SystemWatcher with stop events
         self.test_generator = RandomTestGeneratorFactory()
-        self.ws_client = WebSocketClient(
-            f"{system_settings.ws_url}{system_settings.app_id}{system_settings.ws_path}",
-            self.lifecycle,
-            self.token,
-            self.api_key,
-        )
-        self.upload_client = UploadClient(self.token, self.api_key)
         if self.lifecycle.test_mode:
             self.ws_client = TestSocketClient(self.test_generator, self.lifecycle)
             self.upload_client = TestUploadClient("TEST_MODE_TOKEN")
+        else:
+            self.token, self.api_key, http_url, ws_url = authenticate_execution()
+            self.upload_client = UploadClient(self.token, self.api_key, base_url=http_url)
+            self.ws_client = WebSocketClient(
+                f"{ws_url}{system_settings.app_id}{system_settings.ws_path}",
+                self.lifecycle, self.token, self.api_key,
+            )
 
         self.file_watcher = FileWatcher(system_settings.config_settings_path, self.ws_client,
                                         self.lifecycle)

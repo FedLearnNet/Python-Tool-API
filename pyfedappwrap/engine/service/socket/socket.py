@@ -11,6 +11,7 @@ from pyfedappwrap.engine.events.internal_events import handle_internal_event
 from pyfedappwrap.engine.observer.subject import Subject
 from pyfedappwrap.engine.runtime_lifecycle import EngineLifecycle
 from pyfedappwrap.engine.service.socket.messages.base import BaseSocketMessage
+from pyfedappwrap.engine.service.execution_auth import authentication_headers
 
 
 class WebSocketClient(Subject, threading.Thread):
@@ -21,15 +22,7 @@ class WebSocketClient(Subject, threading.Thread):
         self.websocket = None
         self.loop = asyncio.new_event_loop()
         self.lifecycle = lifecycle
-        self.additional_headers = {}
-        if token:
-            logging.info("Use Authorization Bearer token")
-            self.additional_headers["Authorization"] = "Bearer " + token
-        if api_key:
-            logging.info("Use Authorization X-API-Key")
-            self.additional_headers["X-API-Key"] = api_key
-        if not self.additional_headers:
-            logging.info("WebSocketClient initialized without authentication headers.")
+        self.additional_headers = authentication_headers(token, api_key)
 
         self.retry_interval = 5
         self.close_code = None
@@ -95,11 +88,10 @@ class WebSocketClient(Subject, threading.Thread):
         while not self.lifecycle.is_stopping():
             try:
                 message = await self.websocket.recv()
-                logging.info(f"Received message: {message[:500]}")
                 try:
                     event_dto = BaseSocketMessage.model_validate_json(message)
                 except ValidationError:
-                    logging.warning(f"Ignoring unsupported message: {message}")
+                    logging.warning("Ignoring unsupported WebSocket message")
                     continue
                 self.handle_event(event_dto)
             except websockets.ConnectionClosed:

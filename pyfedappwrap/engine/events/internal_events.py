@@ -21,7 +21,7 @@ def handle_internal_event(event: BaseSocketMessage, send_sync):
                                         run_type=run_type))
 
         send_sync(BaseSocketMessage(type=WebsocketMessageTypes.CONFIG_CLIENT_SEND,
-                                    message=system_settings.model_dump(),
+                                    message=system_settings.model_dump(exclude={"app_key", "app_api_key"}),
                                     run_type=run_type))
 
         send_sync(BaseSocketMessage(type=WebsocketMessageTypes.DATA_LIST_CLIENT_SEND,

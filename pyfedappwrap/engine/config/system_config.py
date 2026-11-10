@@ -67,8 +67,8 @@ class Settings(BaseSettings):
     fl_run: FLRunSettings = FLRunSettings()
 
     app_id: str = Field(default="1")
-    app_key: Optional[str] = Field(default=None)
-    app_api_key: Optional[str] = Field(default=None)
+    app_key: Optional[str] = Field(default=None, repr=False)
+    app_api_key: Optional[str] = Field(default=None, repr=False)
 
     enable_config_sync: bool = Field(default=False)
     prio_local_config: bool = Field(default=False)
