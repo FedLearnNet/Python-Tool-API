@@ -49,11 +49,14 @@ def test_bootstrap_requires_user_auth_and_keeps_api_prefix(monkeypatch):
     ("http://backend/api/testembed/", None),
     ("http://backend/api/execution/APP/", "http://auth/api/testembed/"),
 ])
-def test_local_login_bootstraps_and_saves_an_app_key_once(monkeypatch, tmp_path, http_url, auth_url):
+@pytest.mark.parametrize("existing_env", [True, False])
+def test_local_login_bootstraps_and_saves_an_app_key_once(monkeypatch, tmp_path, http_url, auth_url, existing_env):
     from dotenv import dotenv_values
 
     env_file = tmp_path / ".env"
-    env_file.write_text("APP_ID=7\nOTHER_SETTING=preserved\n")
+    if existing_env:
+        env_file.write_text("APP_ID=7\nOTHER_SETTING=preserved\n")
+        env_file.chmod(0o644)
     monkeypatch.setitem(system_settings.model_config, "env_file", str(env_file))
     monkeypatch.setattr(system_settings, "app_id", "7")
     monkeypatch.setattr(system_settings, "app_api_key", None)
@@ -66,6 +69,14 @@ def test_local_login_bootstraps_and_saves_an_app_key_once(monkeypatch, tmp_path,
     post = Mock(return_value=response(payload={"apiKey": "app-key"}))
     monkeypatch.setattr(execution_auth.KeycloakClient, "get_token", login)
     monkeypatch.setattr(execution_auth.requests, "post", post)
+    set_key = execution_auth.set_key
+
+    def save_key(path, *args):
+        # Credentials must never be written while the file is readable by other users.
+        assert Path(path).stat().st_mode & 0o777 == 0o600
+        return set_key(path, *args)
+
+    monkeypatch.setattr(execution_auth, "set_key", save_key)
 
     first = execution_auth.authenticate_execution()
     second = execution_auth.authenticate_execution()
@@ -76,7 +87,8 @@ def test_local_login_bootstraps_and_saves_an_app_key_once(monkeypatch, tmp_path,
     post.assert_called_once()
     assert post.call_args.args == (f"{auth_url or http_url}7/credential",)
     assert post.call_args.kwargs["headers"] == {"Authorization": "Bearer oauth-token"}
-    assert dotenv_values(env_file) == {"APP_ID": "7", "OTHER_SETTING": "preserved", "APP_API_KEY": "app-key"}
+    expected = {"APP_ID": "7", "OTHER_SETTING": "preserved"} if existing_env else {}
+    assert dotenv_values(env_file) == {**expected, "APP_API_KEY": "app-key"}
     assert env_file.stat().st_mode & 0o777 == 0o600
 
     root = upload_client.UploadClient(first[0], first[1], base_url=first[2])

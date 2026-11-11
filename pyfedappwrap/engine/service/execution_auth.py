@@ -1,3 +1,4 @@
+from pathlib import Path
 from urllib.parse import urlsplit
 
 import requests
@@ -22,7 +23,10 @@ def authenticate_execution():
             http_url, ws_url = execution_base_url(http_url), execution_base_url(ws_url)
         api_key = bootstrap_execution(system_settings.auth_url or http_url, system_settings.app_id, token)
         if development:
-            set_key(system_settings.model_config["env_file"], "APP_API_KEY", api_key)
+            env_file = Path(system_settings.model_config["env_file"])
+            env_file.touch(mode=0o600, exist_ok=True)
+            env_file.chmod(0o600)
+            set_key(env_file, "APP_API_KEY", api_key)
             system_settings.app_api_key = api_key
     return token, api_key, http_url, ws_url
 
