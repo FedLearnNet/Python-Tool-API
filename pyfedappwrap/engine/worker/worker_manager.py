@@ -1,7 +1,7 @@
-import asyncio
 import copy
 import threading
 import traceback
+from collections import deque
 from uuid import uuid4
 
 from pyfedappwrap.engine.config.system_config import system_settings
@@ -25,6 +25,8 @@ class WorkerManager(Observer):
         self.logger = WebSocketLogger("WorkerManager", self.websocket_client)
         self.worker = None
         self.available_worker = None
+        self._worker_lock = threading.RLock()
+        self._pending_runs = deque()
         self.logger.info(f"WorkerManager initialized.")
 
     def start_worker(self, run_id, run_type: RunType, upload_client: UploadClient | None = None):
@@ -41,7 +43,7 @@ class WorkerManager(Observer):
         worker.set_startup(self.websocket_client, upload_client if upload_client is not None else self.upload_client,
                            uuid, run_id, run_type,
                            self.lifecycle,
-                           self.stop_worker)
+                           lambda error=None: self.stop_worker(error, expected_worker=worker))
         self.worker = worker
 
         # Start the worker in a separate thread
@@ -49,7 +51,13 @@ class WorkerManager(Observer):
         worker_thread.start()
         self.logger.info(f"App started.")
 
-    def stop_worker(self, error=None):
+    def stop_worker(self, error=None, expected_worker=None):
+        with self._worker_lock:
+            if expected_worker is not None and self.worker is not expected_worker:
+                return
+            self._stop_worker(error)
+
+    def _stop_worker(self, error):
         if self.lifecycle.test_mode and error is not None:
             self.lifecycle.request_exit(error)
             self.logger.error(f"Error: {error}")
@@ -61,6 +69,12 @@ class WorkerManager(Observer):
             self.logger.info(f"App stopped.")
         else:
             self.logger.error(f"Cannot stop app. App not started.")
+        if error is not None or self.lifecycle.is_stopping():
+            self._pending_runs.clear()
+        elif self._pending_runs:
+            run_id, run_type, upload_client, task = self._pending_runs.popleft()
+            self.start_worker(run_id, run_type, upload_client)
+            self.enqueue_task(task)
 
     def get_worker_status(self):
         if self.worker is not None:
@@ -69,11 +83,7 @@ class WorkerManager(Observer):
 
     def enqueue_task(self, task):
         if self.worker is not None:
-            loop = asyncio.get_event_loop()
-            if not loop.is_running():
-                loop.run_until_complete(self.worker.enqueue_task(task))
-            else:
-                loop.create_task(self.worker.enqueue_task(task))
+            self.worker.task_queue.put_nowait(task)
         else:
             self.logger.error(f"App not started. Cannot start task: {task}")
 
@@ -87,8 +97,13 @@ class WorkerManager(Observer):
                     return
                 event_message = event.message
                 upload_client = self.upload_client.for_execution(event_message)
-                self.start_worker(event_message["id"], event.run_type, upload_client)
-                self.enqueue_task(AppTaskMessage(task=event.type, body=event.message))
+                task = AppTaskMessage(task=event.type, body=event_message)
+                with self._worker_lock:
+                    if self.worker is not None:
+                        self._pending_runs.append((event_message["id"], event.run_type, upload_client, task))
+                    else:
+                        self.start_worker(event_message["id"], event.run_type, upload_client)
+                        self.enqueue_task(task)
 
         except Exception as e:
             if self.worker is not None:

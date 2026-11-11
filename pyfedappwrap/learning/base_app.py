@@ -1,10 +1,9 @@
 import asyncio
 import shutil
 import threading
-import time
 import traceback
 from abc import ABC, abstractmethod
-from asyncio import Queue
+from queue import Empty, Queue
 from dataclasses import asdict
 from enum import Enum
 from pathlib import Path
@@ -241,23 +240,20 @@ class BaseApp(ABC, Generic[C, I, O]):
 
     async def start_process(self):
         try:
-            # Start CPU tracking in a separate thread
-            # tracking_thread = threading.Thread(target=self.track_cpu_usage)
-            # tracking_thread.start()
             self.update_status(RunStatusTypes.RUNNING)
 
             # Perform tasks from the queue
-            while not self._lifecycle.is_stopping() or not self.finish_event.is_set():
-                if not self.task_queue.empty():
-                    task = await self.task_queue.get()
-                    self.perform_task(task)
-                else:
-                    time.sleep(1)
+            while not self._lifecycle.is_stopping() and not self.finish_event.is_set():
+                try:
+                    task = self.task_queue.get(timeout=0.1)
+                except Empty:
+                    continue
+                self.perform_task(task)
 
-            self.stop_worker()
-            self.update_status(RunStatusTypes.FINISHED)
-
-            # tracking_thread.join()
+            # finish_run already releases the worker and reports completion for this batch.
+            # A second final status here would prematurely end a transformer session.
+            if not self.finish_event.is_set():
+                self.stop_worker()
         except Exception as e:
             self.update_status(RunStatusTypes.ERROR, str(e))
             self.logger.error(f"Error in start_process: {e}")
@@ -424,8 +420,8 @@ class BaseApp(ABC, Generic[C, I, O]):
         return self.status
 
     async def enqueue_task(self, task: AppTaskMessage):
-        """Add a task to the queue."""
-        await self.task_queue.put(task)
+        """Add a task from the socket thread without waiting for the worker's event loop."""
+        self.task_queue.put_nowait(task)
         self.logger.info(f"Task added to queue: {task}")
 
     @staticmethod
