@@ -45,7 +45,6 @@ env:
   PYTHON_VERSION: "3.11"
   IMAGES: base-python base-python-dep base-r base-r-dep base-r-biocmanager base-r-dep-biocmanager code-transformer-runtime
   # Develop images take pyfedappwrap from TestPyPI and move staging instead of latest, like the other FL-Net images
-  PYPI_JSON: ${{ inputs.testpypi && 'https://test.pypi.org/pypi' || 'https://pypi.org/pypi' }}
   INDEX_URL: ${{ inputs.testpypi && 'https://test.pypi.org/simple/' || '' }}
   MOVING_TAG: ${{ inputs.testpypi && 'staging' || 'latest' }}
 
@@ -101,17 +100,19 @@ jobs:
           fi
 
       # The images install pyfedappwrap from (Test)PyPI (published by publish.yml), so the release has to be available first.
+      # Checked through pip: the JSON API updates right after the upload, the CDN-cached simple index pip reads lags behind.
       - name: Wait for the release on (Test)PyPI
         if: steps.check.outputs.build == 'true'
         env:
           VERSION: ${{ steps.check.outputs.package_version }}
         run: |
           for attempt in $(seq 1 20); do
-            curl -sf "$PYPI_JSON/FL-Net-Python-Tool-API/$VERSION/json" > /dev/null && exit 0
-            echo "pyfedappwrap $VERSION is not on $PYPI_JSON yet ($attempt/20)"
+            python3 -m pip download -q --no-cache-dir --no-deps ${INDEX_URL:+--index-url "$INDEX_URL"} \
+              -d "$RUNNER_TEMP/pyfedappwrap" "FL-Net-Python-Tool-API==$VERSION" && exit 0
+            echo "pyfedappwrap $VERSION is not on ${INDEX_URL:-PyPI} yet ($attempt/20)"
             sleep 30
           done
-          echo "::error::pyfedappwrap $VERSION is not published on $PYPI_JSON"
+          echo "::error::pyfedappwrap $VERSION is not published on ${INDEX_URL:-PyPI}"
           exit 1
 
   build:

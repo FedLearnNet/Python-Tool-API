@@ -28,12 +28,16 @@ RUN apk add --no-cache \
 
 RUN python -m venv /opt/venv
 
+# A fresh upload can take minutes to reach the simple index on every CDN edge, so the lookup is retried
 RUN set -eux; \
-    package="FL-Net-Python-Tool-API==${PYFEDAPPWRAP_VERSION}"; \
-    if [ -n "${PYFEDAPPWRAP_INDEX_URL}" ]; then \
-      pip download --no-cache-dir --no-deps --index-url "${PYFEDAPPWRAP_INDEX_URL}" -d /tmp/pyfedappwrap "${package}"; \
-      package="$(ls /tmp/pyfedappwrap/*)"; \
-    fi; \
+    index=""; \
+    if [ -n "${PYFEDAPPWRAP_INDEX_URL}" ]; then index="--index-url ${PYFEDAPPWRAP_INDEX_URL}"; fi; \
+    for attempt in 1 2 3 4 5 6 7 8 9 10; do \
+      pip download --no-cache-dir --no-deps ${index} -d /tmp/pyfedappwrap "FL-Net-Python-Tool-API==${PYFEDAPPWRAP_VERSION}" && break; \
+      [ "${attempt}" -lt 10 ] || exit 1; \
+      sleep 30; \
+    done; \
+    package="$(ls /tmp/pyfedappwrap/*)"; \
     if [ "${PYFEDAPPWRAP_WITH_DEPS}" = "1" ] || [ "${PYFEDAPPWRAP_WITH_DEPS}" = "true" ]; then \
       pip install --no-cache-dir "${package}"; \
     else \

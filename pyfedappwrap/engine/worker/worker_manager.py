@@ -27,7 +27,7 @@ class WorkerManager(Observer):
         self.available_worker = None
         self.logger.info(f"WorkerManager initialized.")
 
-    def start_worker(self, run_id, run_type: RunType):
+    def start_worker(self, run_id, run_type: RunType, upload_client: UploadClient | None = None):
         if self.worker is not None:
             self.logger.error(f"Cannot start app, cause App is already running.")
             return
@@ -38,7 +38,8 @@ class WorkerManager(Observer):
         worker = copy.deepcopy(self.available_worker)
 
         uuid = f"Run: {run_id}-{uuid4().__str__()}"
-        worker.set_startup(self.websocket_client, self.upload_client, uuid, run_id, run_type,
+        worker.set_startup(self.websocket_client, upload_client if upload_client is not None else self.upload_client,
+                           uuid, run_id, run_type,
                            self.lifecycle,
                            self.stop_worker)
         self.worker = worker
@@ -85,7 +86,8 @@ class WorkerManager(Observer):
                     self.logger.error(f"Project startup is disabled.")
                     return
                 event_message = event.message
-                self.start_worker(event_message["id"], event.run_type)
+                upload_client = self.upload_client.for_execution(event_message)
+                self.start_worker(event_message["id"], event.run_type, upload_client)
                 self.enqueue_task(AppTaskMessage(task=event.type, body=event.message))
 
         except Exception as e:

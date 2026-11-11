@@ -258,21 +258,38 @@ def test_upload_failure_closes_files_and_rejects_redirects(monkeypatch, tmp_path
     assert handles[0].closed
 
 
-def test_start_credential_is_owned_by_the_worker_upload_client(monkeypatch, caplog):
-    from pyfedappwrap.engine.worker.worker_manager import WorkerManager
+@pytest.mark.parametrize("event_type,run_type", [
+    (WebsocketMessageTypes.START_RUN, RunType.TEST_RUN),
+    (WebsocketMessageTypes.START_RUN, RunType.EXPERIMENT_RUN),
+    (WebsocketMessageTypes.START_PREDICTION, RunType.MODEL_RUN),
+])
+def test_start_credential_is_owned_by_the_worker_upload_client(monkeypatch, caplog, event_type, run_type):
+    from pyfedappwrap.engine.worker import worker_manager
 
     monkeypatch.setattr(system_settings, "http_url", "http://backend/testembed/")
-    manager = WorkerManager(Mock(), upload_client.UploadClient("user-token"), EngineLifecycle())
-    manager.start_worker = Mock()
+    manager = worker_manager.WorkerManager(Mock(), upload_client.UploadClient("user-token", "engine-key"),
+                                           EngineLifecycle())
+    manager.available_worker = Mock()
+    worker = Mock()
+    monkeypatch.setattr(worker_manager.copy, "deepcopy", Mock(return_value=worker))
+    monkeypatch.setattr(worker_manager.threading, "Thread", Mock())
+    post = Mock(return_value=response(201))
+    monkeypatch.setattr(upload_client.requests, "post", post)
     manager.enqueue_task = Mock()
     event = BaseSocketMessage(
-        type=WebsocketMessageTypes.START_RUN, runType=RunType.EXPERIMENT_RUN,
+        type=event_type, runType=run_type,
         message={"id": 100, "executionId": 42, "executionApiKey": "secret-attempt-key"},
     )
     manager.update(event)
-    run_id, run_type, client = manager.start_worker.call_args.args
-    assert (run_id, run_type, client.app_id, client.api_key) == (100, RunType.EXPERIMENT_RUN, 42, "secret-attempt-key")
+    _, client, _, worker_run_id, worker_run_type, *_ = worker.set_startup.call_args.args
+    assert (worker_run_id, worker_run_type) == (100, run_type)
+    client.upload_output(worker_run_type, worker_run_id, {"score": 0.7})
+    assert post.call_args.args == ("http://backend/execution/APP/42/upload/output",)
+    assert post.call_args.kwargs["data"]["runId"] == "42"
+    assert post.call_args.kwargs["headers"] == {"X-API-Key": "secret-attempt-key"}
+    assert manager.upload_client.api_key == "engine-key"
     assert event.message == {"id": 100}
+    assert manager.enqueue_task.call_args.args[0].body == {"id": 100}
     assert "secret-attempt-key" not in caplog.text
 
 
