@@ -151,10 +151,11 @@ class FederatedWorkerManager(Observer):
             *,
             run_type: Any,
             use_external_controller: bool,
+            distributed_test: bool = False,
     ) -> Optional[str]:
         if not use_external_controller:
             return None
-        if FederatedWorkerManager._is_test_run(run_type):
+        if FederatedWorkerManager._is_test_run(run_type) and not distributed_test:
             source = "FL_TEST__DOCKERIZED_CONTROLLER_COMM_URL"
             configured_url = system_settings.fl_test.dockerized_controller_comm_url
         else:
@@ -175,6 +176,8 @@ class FederatedWorkerManager(Observer):
         source_root = Path(system_settings.data_dir)
 
         for relative_path in participant.input_file_paths.values():
+            if relative_path.startswith(("http://", "https://")):
+                continue
             source = source_root / relative_path
             if not source.exists():
                 logging.warning("Skipping missing federated input file %s for %s", source, participant.participant_id)
@@ -192,7 +195,7 @@ class FederatedWorkerManager(Observer):
             run_type: Any,
     ) -> FLNetLocalTestConfigDTO:
         cfg = run_dto.config
-        use_external_controller = FederatedWorkerManager._should_use_external_controller(run_type)
+        use_external_controller = run_dto.distributed_test or FederatedWorkerManager._should_use_external_controller(run_type)
         coordinator_id = getattr(cfg, "coordinator_id", None) if cfg else None
         client_ids_override = None
         order_client_ids = getattr(cfg, "order_client_ids", None) if cfg else None
@@ -205,7 +208,7 @@ class FederatedWorkerManager(Observer):
         # Real distributed rounds (clinics train + network + the coordinator's own contribution) need a
         # far more generous wait than the in-memory test path: 500 polls * 0.01s = 5s times out a real
         # round. Use ~600s (0.25s * 2400) for real runs unless the backend overrides it.
-        is_test = FederatedWorkerManager._is_test_run(run_type)
+        is_test = FederatedWorkerManager._is_test_run(run_type) and not run_dto.distributed_test
         default_poll_interval = 0.01 if is_test else 0.25
         default_timeout = DEFAULT_APP_COMM_TIMEOUT if is_test else 600.0
         default_max_polls = 500 if is_test else 2400
@@ -220,8 +223,9 @@ class FederatedWorkerManager(Observer):
             controller_url=FederatedWorkerManager._resolve_controller_url(
                 run_type=run_type,
                 use_external_controller=use_external_controller,
+                distributed_test=run_dto.distributed_test,
             ),
-            simulate_participants_locally=FederatedWorkerManager._is_test_run(run_type),
+            simulate_participants_locally=is_test,
             aggregator_id_override=coordinator_id,
             client_ids_override=client_ids_override,
         )
@@ -240,8 +244,10 @@ class FederatedWorkerManager(Observer):
     def _run_federated(self, run_dto: FederatedTestRunCreateDTO, run_type: Any, upload_client=None) -> None:
         upload_client = upload_client or self.upload_client
         run_id = run_dto.id
-        reporter = FederatedStatusReporter(self.ws_client, run_id)
+        execution_type = RunType.FEDERATED_TEST_RUN if self._is_test_run(run_type) else RunType.FEDERATED_RUN
+        reporter = FederatedStatusReporter(self.ws_client, run_id, run_type=execution_type)
         reporter.update_run(status="STARTED", current_round=0)
+        test_manager = None
 
         try:
             if self.available_app is None:
@@ -256,7 +262,7 @@ class FederatedWorkerManager(Observer):
                 reporter.finish_run(status="ERROR", error="No participants configured")
                 return
 
-            if not self._is_test_run(run_type):
+            if not self._is_test_run(run_type) or run_dto.distributed_test:
                 # Real runs: results must land in OUTPUT_DIR (the platform's output volume) so the
                 # learning API can harvest them after FINISH. Without this, participants (notably
                 # the aggregator) write to /tmp/fedrun/<id>/output inside the container and the
@@ -269,14 +275,15 @@ class FederatedWorkerManager(Observer):
 
             if (
                 self._is_test_run(run_type)
+                and not run_dto.distributed_test
                 and system_settings.fl_test.use_dockerized_controller
             ):
                 logging.info(
                     "Federated test run %s uses dockerized controller; starting/checking services before runner.",
                     run_id,
                 )
-                test_manger = FederatedDockerizedControllerClient()
-                test_manger.setup_dockerized_fl_run(run_dto, config, participants)
+                test_manager = FederatedDockerizedControllerClient()
+                test_manager.setup_dockerized_fl_run(run_dto, config, participants)
                 logging.info(
                     "Federated test run %s dockerized setup complete: controller_url=%s channel=%s",
                     run_id,
@@ -307,7 +314,7 @@ class FederatedWorkerManager(Observer):
                         f"FederatedParticipant[{participant.participant_id}]",
                         self.ws_client,
                         run_id,
-                        RunType.FEDERATED_RUN,
+                        execution_type,
                         process_name=participant.participant_id,
                         worker_id=participant.participant_id,
                     )
@@ -330,10 +337,12 @@ class FederatedWorkerManager(Observer):
                 lifecycle=self.lifecycle,
                 reporter=reporter,
                 run_id=run_id,
-                run_type=RunType.FEDERATED_RUN,
+                run_type=execution_type,
                 round_source_app=self.available_app,
             )
             results = runner.run(apps_by_participant)
+            if test_manager is not None:
+                test_manager.cleanup()
 
             aggregator_output: Optional[dict[str, Any]] = None
             outcome = results.get(config.aggregator_id)
@@ -363,6 +372,8 @@ class FederatedWorkerManager(Observer):
                 reporter.finish_run(status="FINISHED", output_data=aggregator_output)
 
         except Exception as exc:
+            if test_manager is not None:
+                test_manager.cleanup()
             logging.exception("Federated run %s crashed: %s", run_id, exc)
             reporter.finish_run(status="ERROR", error=f"{type(exc).__name__}: {exc}")
         finally:

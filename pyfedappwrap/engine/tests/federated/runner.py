@@ -394,6 +394,9 @@ class LocalFederatedRunner:
                 if bridge is not None:
                     bridge.publish_result(communication_id, aggregated)
                 logger.info("[AGGREGATOR] round %d complete (comm_id=%s)", round_nr, communication_id)
+                if self.reporter is not None:
+                    self.reporter.update_participant(participant.participant_id, current_round=round_nr)
+                    self.reporter.update_run(status="RUNNING", current_round=round_nr)
             with local_runtime_paths(output_dir=output_dir):
                 self._save_aggregated_result(
                     aggregated,
@@ -405,6 +408,8 @@ class LocalFederatedRunner:
             communicator.unbind_notice_subject()
 
     def _save_aggregator_model(self, aggregator_key: str, aggregated: Any) -> None:
+        if RunType.FEDERATED_TEST_RUN.equals(self.run_type):
+            return
         aggregator = self._aggregators.get(aggregator_key)
         if aggregator is None:
             return

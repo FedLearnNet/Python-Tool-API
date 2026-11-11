@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import threading
 from typing import Any, Optional
+from pyfedappwrap.engine.enums.test_embed_states import RunType
 
 from pyfedappwrap.engine.service.socket.messages.federated import (
     FederatedParticipantUpdateDTO,
@@ -25,13 +26,15 @@ from pyfedappwrap.engine.service.socket.messages.federated import (
 
 
 class FederatedStatusReporter:
-    def __init__(self, ws_client: Optional[Any], federated_run_id: int):
+    def __init__(self, ws_client: Optional[Any], federated_run_id: int, run_type: RunType = RunType.FEDERATED_RUN):
         self.ws_client = ws_client
         self.federated_run_id = federated_run_id
+        self.run_type = run_type
         self._lock = threading.Lock()
         # per-participant counters kept locally so the runner doesn't have to
         self._messages_sent: dict[str, int] = {}
         self._messages_received: dict[str, int] = {}
+        self._current_rounds: dict[str, int] = {}
 
     # ----- run level ---------------------------------------------------------
 
@@ -47,7 +50,7 @@ class FederatedStatusReporter:
             error=error,
             output_data=output_data,
         )
-        self.ws_client.send(SendFederatedUpdateRunDTO(message=dto))
+        self.ws_client.send(SendFederatedUpdateRunDTO(message=dto, run_type=self.run_type))
 
     def finish_run(self, status: str = "FINISHED", current_round: Optional[int] = None,
                    error: Optional[str] = None,
@@ -61,7 +64,7 @@ class FederatedStatusReporter:
             error=error,
             output_data=output_data,
         )
-        self.ws_client.send(SendFederatedFinishRunDTO(message=dto))
+        self.ws_client.send(SendFederatedFinishRunDTO(message=dto, run_type=self.run_type))
 
     # ----- participant level -------------------------------------------------
 
@@ -73,6 +76,9 @@ class FederatedStatusReporter:
         with self._lock:
             sent = self._messages_sent.get(participant_id, 0)
             received = self._messages_received.get(participant_id, 0)
+            if current_round is not None:
+                self._current_rounds[participant_id] = max(current_round, self._current_rounds.get(participant_id, 0))
+            current_round = self._current_rounds.get(participant_id, current_round)
         dto = FederatedParticipantUpdateDTO(
             federated_run_id=self.federated_run_id,
             participant_id=participant_id,
@@ -82,7 +88,7 @@ class FederatedStatusReporter:
             messages_received=received,
             waiting_for=waiting_for,
         )
-        self.ws_client.send(SendFederatedParticipantUpdateDTO(message=dto))
+        self.ws_client.send(SendFederatedParticipantUpdateDTO(message=dto, run_type=self.run_type))
 
     # ----- round messages ----------------------------------------------------
 
@@ -101,6 +107,10 @@ class FederatedStatusReporter:
             if receive:
                 self._messages_received[to_participant] = self._messages_received.get(
                     to_participant, 0) + 1
+            participant_id = from_participant if send else to_participant
+            round_advanced = round_nr is not None and round_nr > self._current_rounds.get(participant_id, 0)
+            if round_advanced:
+                self._current_rounds[participant_id] = round_nr
 
         if self.ws_client is None:
             print(
@@ -115,7 +125,9 @@ class FederatedStatusReporter:
             communication_id=communication_id,
             payload_preview=payload_preview,
         )
-        self.ws_client.send(SendFederatedRoundMessageDTO(message=dto))
+        self.ws_client.send(SendFederatedRoundMessageDTO(message=dto, run_type=self.run_type))
+        if round_advanced:
+            self.update_participant(participant_id)
 
     def get_counts(self, participant_id: str) -> tuple[int, int]:
         with self._lock:

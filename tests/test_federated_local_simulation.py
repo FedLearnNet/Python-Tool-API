@@ -1,10 +1,13 @@
 from pathlib import Path
+from unittest.mock import Mock
 
 import numpy as np
 import pandas as pd
+import pytest
 from pydantic.dataclasses import dataclass
 
 from pyfedappwrap.engine.config.system_config import system_settings
+from pyfedappwrap.engine.enums.test_embed_states import RunType
 from pyfedappwrap.engine.federated import (
     FLNetLocalParticipantConfigDTO,
     FLNetLocalTestConfigDTO,
@@ -374,8 +377,11 @@ def test_local_federated_runner_aggregator_only_resolves_rounds_from_round_sourc
     )
     aggregator = _CountingMeanAggregator()
 
+    ws_client = FakeFederatedWsClient()
+    reporter = FederatedStatusReporter(ws_client, federated_run_id=55)
     runner = LocalFederatedRunner(config, aggregators={"mean": aggregator},
-                                  round_source_app=_MultiRoundMeanClientApp())
+                                  round_source_app=_MultiRoundMeanClientApp(),
+                                  reporter=reporter, ws_client=ws_client)
     results = runner.run({
         "client-1": _MultiRoundMeanClientApp(),
         "client-2": _MultiRoundMeanClientApp(),
@@ -384,3 +390,57 @@ def test_local_federated_runner_aggregator_only_resolves_rounds_from_round_sourc
     assert all(result.success for result in results.values()), results
     assert aggregator.calls == 3
     assert np.allclose(results["aggregator"].result, np.array([3.0, 5.0]))
+    assert reporter.get_counts("aggregator") == (6, 6)
+    assert reporter.get_counts("client-1") == (3, 3)
+    assert reporter.get_counts("client-2") == (3, 3)
+    messages = [m.message for m in ws_client.messages
+                if getattr(m.type, "value", None) == "FEDERATED_ROUND_MESSAGE"]
+    assert len(messages) == 24
+    assert {m.round for m in messages} == {1, 2, 3}
+    participant_ids = {"aggregator", "client-1", "client-2"}
+    assert all(m.from_participant in participant_ids and m.to_participant in participant_ids for m in messages)
+    for participant_id in participant_ids:
+        # Final updates without a round must retain the completed round.
+        reporter.update_participant(participant_id, status="FINISHED")
+        assert ws_client.messages[-1].message.current_round == 3
+
+
+@pytest.mark.parametrize("run_type", [RunType.FEDERATED_TEST_RUN, RunType.FEDERATED_RUN])
+def test_aggregator_uploads_models_only_for_real_runs(monkeypatch, tmp_path, run_type):
+    participant = FLNetLocalParticipantConfigDTO(participant_id="aggregator", role="aggregator", base_dir=tmp_path)
+    config = FLNetLocalTestConfigDTO(participants=[participant])
+    aggregator = Mock(spec=MeanVectorAggregator)
+    aggregator.save_model = Mock(return_value="model.bin")
+    (tmp_path / "model.bin").write_bytes(b"model")
+    monkeypatch.setattr(system_settings, "model_dir", str(tmp_path))
+    upload = Mock()
+    runner = LocalFederatedRunner(config, aggregators={"mean": aggregator}, upload_client=upload, run_type=run_type)
+
+    runner._save_aggregator_model("mean", [1.0, 2.0])
+
+    if run_type == RunType.FEDERATED_TEST_RUN:
+        aggregator.save_model.assert_not_called()
+        upload.upload_model_file.assert_not_called()
+    else:
+        aggregator.save_model.assert_called_once_with([1.0, 2.0])
+        upload.upload_model_file.assert_called_once()
+
+
+@pytest.mark.parametrize("run_type", [RunType.TEST_RUN, RunType.FEDERATED_TEST_RUN, RunType.FEDERATED_RUN, RunType.EXPERIMENT_RUN])
+def test_client_test_runs_do_not_upload_models(monkeypatch, run_type):
+    monkeypatch.setattr(system_settings, "config_settings_path", "tests/configs/federated_app.yml")
+    app = FederatedMeanClientApp()
+    app.run_type = run_type
+    app._save = Mock(return_value="model.bin")
+    app.saver = Mock()
+
+    app.save()
+
+    if run_type in (RunType.TEST_RUN, RunType.FEDERATED_TEST_RUN):
+        app._save.assert_not_called()
+    else:
+        app._save.assert_called_once()
+    if run_type == RunType.EXPERIMENT_RUN:
+        app.saver.save.assert_called_once()
+    else:
+        app.saver.save.assert_not_called()

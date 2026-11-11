@@ -49,6 +49,7 @@ class FederatedTestRunCreateDTO(BaseModel):
     model_config = ConfigDict(populate_by_name=True, extra="allow")
 
     id: int
+    distributed_test: bool = Field(default=False, alias="distributedTest")
     status: Optional[str] = None
     error: Optional[str] = None
     current_round: Annotated[Optional[int], Field(default=None, alias="currentRound")]

@@ -1,8 +1,9 @@
+import os
 from pathlib import Path
 from urllib.parse import urlsplit
 
 import requests
-from dotenv import set_key
+from dotenv import dotenv_values, set_key, unset_key
 
 from pyfedappwrap.engine.config.system_config import system_settings
 from pyfedappwrap.engine.service.keycloak.keycloak import KeycloakClient
@@ -12,13 +13,22 @@ def authenticate_execution():
     token = (system_settings.app_key or "").strip() or None
     api_key = (system_settings.app_api_key or "").strip() or None
     http_url, ws_url = system_settings.http_url, system_settings.ws_url
+    development = urlsplit(ws_url).path.rstrip("/").endswith("/testembed")
+    if development and system_settings.dev_mode:
+        # A local engine starts a fresh login, including after a backend/database restart.
+        # Remove the cached key before login so a failed bootstrap cannot leave it behind.
+        env_file = Path(system_settings.model_config["env_file"])
+        if env_file.is_file() and "APP_API_KEY" in dotenv_values(env_file):
+            unset_key(env_file, "APP_API_KEY")
+        os.environ.pop("APP_API_KEY", None)
+        system_settings.app_api_key = None
+        api_key = None
     if not api_key:
         if not token and not system_settings.dev_mode:
             raise ValueError("Supply APP_API_KEY or an authenticated APP_KEY for execution bootstrap")
         token = token or KeycloakClient().get_token()
         if not token:
             raise ValueError("Execution authentication failed")
-        development = urlsplit(ws_url).path.rstrip("/").endswith("/testembed")
         if not development:
             http_url, ws_url = execution_base_url(http_url), execution_base_url(ws_url)
         api_key = bootstrap_execution(system_settings.auth_url or http_url, system_settings.app_id, token)

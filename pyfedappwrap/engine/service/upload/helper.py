@@ -22,11 +22,8 @@ def get_base_address(url: str) -> str:
 
 def is_remote_resource(value: Any) -> bool:
     try:
-        result = isinstance(value, str) and validators.url(value, simple_host=True)
-        logging.info(f"Checking if '{value}' is a valid URL: {result}")
-        return result
+        return isinstance(value, str) and validators.url(value, simple_host=True) is True
     except Exception:
-        logging.warning(f"Remote resource '{value}' is not a valid URL")
         return False
 
 
@@ -34,12 +31,13 @@ def download_file(file_url: str, token: Optional[str], as_utf_8: bool = False) -
     parsed_file_url = replace_domain(file_url, system_settings.http_url)
     url = remove_path_prefix(parsed_file_url, system_settings.url_prefix_remove)
     headers = get_request_header(token)
-    response = requests.get(parsed_file_url, headers=headers)
+    response = requests.get(url, headers=headers)
     logger = logging.getLogger(__name__)
-    logger.info(f"Downloading file from {url} instead of {file_url}")
+    address = urlparse(url)._replace(query="", fragment="").geturl()
+    logger.info("Downloading file from %s", address)
     if response.status_code == 200:
         if as_utf_8:
             return response.content.decode("utf-8")
         return response.content
-    logger.error("Failed to download file from %s: %s", url, response.status_code)
+    logger.error("Failed to download file from %s: %s", address, response.status_code)
     return None

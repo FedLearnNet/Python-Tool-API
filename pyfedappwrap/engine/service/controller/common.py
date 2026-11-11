@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import logging
+import re
 import threading
 import time
 from typing import Any, Optional, List
@@ -28,6 +29,14 @@ from pyfedappwrap.engine.federated.serializer import FLNetSerializer
 from pyfedappwrap.engine.service.socket.messages.base import BaseSocketMessage
 
 logger = logging.getLogger(__name__)
+
+
+def _communication_round(communication_id: str) -> Optional[int]:
+    if communication_id.startswith(AUTO_COMM_ID):
+        suffix = communication_id[len(AUTO_COMM_ID):].lstrip("_")
+        return int(suffix) if suffix.isdigit() else None
+    match = re.search(r"(?:^|[-_])round[-_](\d+)$", communication_id)
+    return int(match.group(1)) if match else None
 
 
 class _FederatedNoticeObserver:
@@ -520,7 +529,7 @@ class FLNetCommunicator:
 
         # We can only report rounds for the clients -> aggregator communication
         # that uses the automatic comm ID that counts rounds
-        round_nr = None
+        round_nr = _communication_round(communication_id or "")
         if not send_to_clients and (not communication_id or communication_id == AUTO_COMM_ID):
             self._auto_communication_counter += 1
             round_nr = self._auto_communication_counter
@@ -529,7 +538,7 @@ class FLNetCommunicator:
         if recipients is None or len(recipients) == 0 or recipients == [self.aggregator_id]:
             if send_to_clients:
                 raise ValueError("Recipients must be provided when reporting send_to_clients events")
-            recipients = [self._parse_aggregator_string_to_report(self.aggregator_id, aggregator_name)]
+            recipients = [self.aggregator_id]
 
         payload_preview = str(self.serializer.serialize(data))[:100]
         for recipient in recipients:
@@ -557,13 +566,13 @@ class FLNetCommunicator:
         if not self.is_aggregator:
             raise ValueError("Only the aggregator can report send events from aggregator")
         if recipients is None or len(recipients) == 0:
-            recipients = [f"{client_id} (client)" for client_id in self.client_ids]
+            recipients = list(self.client_ids)
         for recipient in recipients:
             self._status_reporter.round_message(
                 receive=False,
                 send=True,
-                round_nr=None,
-                from_participant=self._parse_aggregator_string_to_report(self.aggregator_id, aggregator_name),
+                round_nr=_communication_round(communication_id),
+                from_participant=self.aggregator_id,
                 to_participant=recipient,
                 communication_id=communication_id,
                 payload_preview=payload_preview,
@@ -574,12 +583,7 @@ class FLNetCommunicator:
             return
         recipient = self._reporter_participant_id or self._resolve_notice_recipient_id()
         for package in packages:
-            round_nr = None
-            if package.meta.communication_id.startswith(AUTO_COMM_ID):
-                try:
-                    round_nr = int(package.meta.communication_id[len(AUTO_COMM_ID):])
-                except (IndexError, ValueError):
-                    round_nr = None
+            round_nr = _communication_round(package.meta.communication_id)
             payload_preview = str(self.serializer.serialize(package.data))[:100]
             self._status_reporter.round_message(
                 receive=True,

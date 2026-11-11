@@ -312,6 +312,7 @@ def test_federated_worker_distinguishes_test_simulation_from_real_run(monkeypatc
         ),
     ]
     run_dto = SimpleNamespace(
+        distributed_test=False,
         config=SimpleNamespace(
             poll_interval=None,
             timeout=None,
@@ -359,6 +360,7 @@ def test_federated_test_run_uses_dockerized_controller_when_setting_enabled():
         ),
     ]
     run_dto = SimpleNamespace(
+        distributed_test=False,
         config=SimpleNamespace(
             poll_interval=None,
             timeout=None,
@@ -399,6 +401,7 @@ def test_real_run_without_controller_url_does_not_fallback_to_dockerized_control
         ),
     ]
     run_dto = SimpleNamespace(
+        distributed_test=False,
         config=SimpleNamespace(
             poll_interval=None,
             timeout=None,
@@ -505,8 +508,14 @@ def test_serializer_round_trips_dataclass_with_postponed_annotations():
     assert np.array_equal(restored.vector, model.vector)
 
 
-def test_await_data_times_out_without_trailing_sleep():
-    import time as _time
+def test_await_data_times_out_without_trailing_sleep(monkeypatch):
+    from unittest.mock import Mock
+    from pyfedappwrap.engine.service.controller import aggregator, common
+
+    clock = [100.0]
+    timer = SimpleNamespace(monotonic=lambda: clock[0])
+    monkeypatch.setattr(aggregator, "time", timer)
+    monkeypatch.setattr(common, "time", timer)
 
     session = FakeSession([FakeResponse(204)])
     communicator = FLNetCommunicatorAggregator(
@@ -522,15 +531,20 @@ def test_await_data_times_out_without_trailing_sleep():
         max_polls=3,
     )
 
-    start = _time.monotonic()
+    def wait_for_notice(**kwargs):
+        clock[0] += kwargs["timeout"]
+        return False
+
+    wait = Mock(side_effect=wait_for_notice)
+    monkeypatch.setattr(communicator, "_wait_for_notice", wait)
     try:
         communicator.await_data_from_clients(num_data_packages_per_communication_round=1)
     except TimeoutError:
         pass
     else:
         raise AssertionError("Expected TimeoutError")
-    elapsed = _time.monotonic() - start
-    assert elapsed < 0.12, f"await_data waited longer than its timeout (elapsed={elapsed:.3f}s)"
+    assert wait.call_count == 1
+    assert wait.call_args.kwargs["timeout"] == pytest.approx(0.05)
     assert len(session.calls) == 1
 
 
@@ -979,6 +993,7 @@ def test_federated_worker_aggregator_only_run_builds_no_training_app(monkeypatch
         def __init__(self, config, **kwargs):
             captured["config"] = config
             captured["round_source_app"] = kwargs.get("round_source_app")
+            captured["run_type"] = kwargs.get("run_type")
 
         def run(self, apps_by_participant):
             captured["apps"] = dict(apps_by_participant)
@@ -1007,6 +1022,7 @@ def test_federated_worker_aggregator_only_run_builds_no_training_app(monkeypatch
 
     assert captured["apps"] == {}
     assert captured["round_source_app"] is registered_app
+    assert captured["run_type"] == RunType.FEDERATED_RUN
     assert captured["config"].aggregator_id == "platform"
     assert captured["config"].resolve_client_ids() == ["clinic-1", "clinic-2"]
     finish = ws_client.messages[-1].message

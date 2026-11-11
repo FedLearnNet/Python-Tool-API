@@ -148,9 +148,11 @@ def get_data(
             data[variable_name] = None
             continue
 
-        file_path = os.path.join(data_dir, file_name)
+        file_name = re.sub(r"^(https?)\\://", r"\1://", file_name)
+        remote_file = is_remote_resource(file_name)
+        file_path = file_name if remote_file else os.path.join(data_dir, file_name)
 
-        if not os.path.exists(file_path):
+        if not remote_file and not os.path.exists(file_path):
             expected_kind = classify_expected_type(expected_type)
 
             if expected_kind == "path":

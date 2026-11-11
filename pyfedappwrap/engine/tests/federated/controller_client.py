@@ -20,9 +20,6 @@ from pyfedappwrap.engine.federated.orchestration import (
 from pyfedappwrap.engine.service.socket.messages.federated import (
     FederatedTestRunCreateDTO,
 )
-from pyfedappwrap.engine.tests.federated.dockerized_services import (
-    ensure_dockerized_federated_services,
-)
 
 
 logger = logging.getLogger(__name__)
@@ -34,6 +31,8 @@ class FederatedDockerizedControllerClient:
 
     def __init__(self):
         self.config: FLTestSettings = system_settings.fl_test
+        self.channel = None
+        self.registered: list[str] = []
 
     def setup_dockerized_fl_run(
             self,
@@ -57,12 +56,6 @@ class FederatedDockerizedControllerClient:
             controller_orch_url,
             controller_comm_url,
         )
-        ensure_dockerized_federated_services(
-            relay_url=relay_url,
-            controller_orch_url=controller_orch_url,
-            startup_timeout_seconds=90.0,
-            health_timeout_seconds=self.HEALTH_CHECK_TIMEOUT_SECONDS,
-        )
         self._assert_service_healthy("relay", relay_url)
         self._assert_service_healthy("orchestration controller", controller_orch_url)
         config.use_external_controller = True
@@ -78,6 +71,7 @@ class FederatedDockerizedControllerClient:
             raise ValueError("At least one federated client participant is required.")
 
         run_info = self._create_relay_run(relay_url, n_clients)
+        self.channel = run_info.channel
         config.channel = run_info.channel
         logger.info(
             "Created dockerized federated relay run channel=%s coordinator=%s clients=%s",
@@ -161,7 +155,22 @@ class FederatedDockerizedControllerClient:
             timeout=self.REQUEST_TIMEOUT_SECONDS,
         )
         response.raise_for_status()
+
         return CreateFLRunResponseDTO.model_validate(response.json())
+
+    def cleanup(self) -> None:
+        if self.channel is None:
+            return
+        endpoints = [(f"{self.config.dockerized_controller_orch_url.rstrip('/')}/stop-learning",
+                      {"channel": self.channel, "appKey": app_key}) for app_key in self.registered]
+        endpoints.append((f"{self.config.dockerized_relay_url.rstrip('/')}/stop-fl-run", {"channel": self.channel}))
+        for url, payload in endpoints:
+            try:
+                self._request("post", url, json=payload, timeout=self.REQUEST_TIMEOUT_SECONDS).raise_for_status()
+            except Exception:
+                logger.exception("Could not clean up federated test service at %s", url)
+        self.channel = None
+        self.registered.clear()
 
     @staticmethod
     def _build_start_learning_request(
@@ -200,6 +209,25 @@ class FederatedDockerizedControllerClient:
             timeout=self.REQUEST_TIMEOUT_SECONDS,
         )
         response.raise_for_status()
+
+        self.registered.append(start_learning_request.app_key)
+        csr = response.json().get("csr")
+        if not csr:
+            raise RuntimeError("Controller returned no certificate signing request")
+        signed = self._request("post", f"{self.config.dockerized_relay_url.rstrip('/')}/sign-fl-run-cert",
+                               json={"channel": start_learning_request.channel,
+                                     "clientId": start_learning_request.client_id, "csr": csr},
+                               timeout=self.REQUEST_TIMEOUT_SECONDS)
+        signed.raise_for_status()
+        certificate = signed.json().get("certificate")
+        if not certificate:
+            raise RuntimeError("Relay returned no signed certificate")
+        connected = self._request("post", f"{controller_orch_url}/start-relaying",
+                                  json={"channel": start_learning_request.channel,
+                                        "appKey": start_learning_request.app_key, "certificate": certificate},
+                                  timeout=self.REQUEST_TIMEOUT_SECONDS)
+        connected.raise_for_status()
+
 
     @staticmethod
     def _request(method: str, url: str, **kwargs) -> Response:

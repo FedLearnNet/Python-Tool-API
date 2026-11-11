@@ -163,8 +163,8 @@ class BaseApp(ABC, Generic[C, I, O]):
 
     def save(self):
         if self.tool_type and self.tool_type == AppType.ANALYSIS:
-            # Only pure TEST_RUN has no model to persist at all.
-            if self.run_type != RunType.TEST_RUN:
+            # Test runs return their results without uploading models.
+            if not any(run_type.equals(self.run_type) for run_type in (RunType.TEST_RUN, RunType.FEDERATED_TEST_RUN)):
                 # Store model locally as file
                 path_name = self._save()
                 # Upload the model

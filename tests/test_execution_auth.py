@@ -50,22 +50,34 @@ def test_bootstrap_requires_user_auth_and_keeps_api_prefix(monkeypatch):
     ("http://backend/api/execution/APP/", "http://auth/api/testembed/"),
 ])
 @pytest.mark.parametrize("existing_env", [True, False])
-def test_local_login_bootstraps_and_saves_an_app_key_once(monkeypatch, tmp_path, http_url, auth_url, existing_env):
+@pytest.mark.parametrize("cached_key", [None, "stale-app-key"])
+def test_local_start_replaces_cached_key(monkeypatch, tmp_path, http_url, auth_url, existing_env, cached_key):
     from dotenv import dotenv_values
 
     env_file = tmp_path / ".env"
     if existing_env:
         env_file.write_text("APP_ID=7\nOTHER_SETTING=preserved\n")
+        if cached_key:
+            with env_file.open("a") as stream:
+                stream.write(f"APP_API_KEY='{cached_key}'\n")
         env_file.chmod(0o644)
     monkeypatch.setitem(system_settings.model_config, "env_file", str(env_file))
     monkeypatch.setattr(system_settings, "app_id", "7")
-    monkeypatch.setattr(system_settings, "app_api_key", None)
+    monkeypatch.setattr(system_settings, "app_api_key", cached_key)
+    monkeypatch.setenv("APP_API_KEY", cached_key or "")
     monkeypatch.setattr(system_settings, "app_key", None)
     monkeypatch.setattr(system_settings, "dev_mode", True)
     monkeypatch.setattr(system_settings, "http_url", http_url)
     monkeypatch.setattr(system_settings, "auth_url", auth_url)
     monkeypatch.setattr(system_settings, "ws_url", "ws://backend/api/testembed/")
-    login = Mock(return_value="oauth-token")
+    def login_without_cached_key():
+        import os
+        assert system_settings.app_api_key is None
+        assert "APP_API_KEY" not in os.environ
+        assert "APP_API_KEY" not in dotenv_values(env_file)
+        return "oauth-token"
+
+    login = Mock(side_effect=login_without_cached_key)
     post = Mock(return_value=response(payload={"apiKey": "app-key"}))
     monkeypatch.setattr(execution_auth.KeycloakClient, "get_token", login)
     monkeypatch.setattr(execution_auth.requests, "post", post)
@@ -79,10 +91,8 @@ def test_local_login_bootstraps_and_saves_an_app_key_once(monkeypatch, tmp_path,
     monkeypatch.setattr(execution_auth, "set_key", save_key)
 
     first = execution_auth.authenticate_execution()
-    second = execution_auth.authenticate_execution()
 
     assert first == ("oauth-token", "app-key", http_url, "ws://backend/api/testembed/")
-    assert second == (None, "app-key", http_url, "ws://backend/api/testembed/")
     login.assert_called_once()
     post.assert_called_once()
     assert post.call_args.args == (f"{auth_url or http_url}7/credential",)
@@ -111,18 +121,48 @@ def test_rejected_local_bootstrap_does_not_save_a_key(monkeypatch, tmp_path):
     assert not env_file.exists()
 
 
-def test_saved_key_skips_auth_url_and_preserves_separate_upload_and_socket_urls(monkeypatch):
+def test_failed_local_login_leaves_cached_key_removed(monkeypatch, tmp_path):
+    from dotenv import dotenv_values
+
+    env_file = tmp_path / ".env"
+    env_file.write_text("APP_ID=7\nAPP_API_KEY='stale-app-key'\nOTHER_SETTING=preserved\n")
+    monkeypatch.setitem(system_settings.model_config, "env_file", str(env_file))
+    monkeypatch.setattr(system_settings, "app_api_key", "stale-app-key")
+    monkeypatch.setattr(system_settings, "app_key", None)
+    monkeypatch.setattr(system_settings, "dev_mode", True)
+    monkeypatch.setattr(system_settings, "ws_url", "ws://backend/api/testembed/")
+    monkeypatch.setattr(execution_auth.KeycloakClient, "get_token", Mock(return_value=None))
+
+    with pytest.raises(ValueError, match="Execution authentication failed"):
+        execution_auth.authenticate_execution()
+
+    assert system_settings.app_api_key is None
+    assert dotenv_values(env_file) == {"APP_ID": "7", "OTHER_SETTING": "preserved"}
+
+
+@pytest.mark.parametrize("dev_mode,ws_url", [
+    (False, "ws://socket/api/testembed/"),
+    (False, "ws://socket/api/execution/APP/"),
+    (True, "ws://socket/api/execution/APP/"),
+])
+def test_execution_key_skips_login_and_preserves_urls(monkeypatch, tmp_path, dev_mode, ws_url):
+    env_file = tmp_path / ".env"
+    original = "APP_API_KEY='app-key'\n"
+    env_file.write_text(original)
+    monkeypatch.setitem(system_settings.model_config, "env_file", str(env_file))
+    monkeypatch.setattr(system_settings, "dev_mode", dev_mode)
     monkeypatch.setattr(system_settings, "app_api_key", "app-key")
     monkeypatch.setattr(system_settings, "app_key", None)
     monkeypatch.setattr(system_settings, "auth_url", "http://auth/api/testembed/")
     monkeypatch.setattr(system_settings, "http_url", "http://uploads/api/execution/APP/")
-    monkeypatch.setattr(system_settings, "ws_url", "ws://socket/api/testembed/")
+    monkeypatch.setattr(system_settings, "ws_url", ws_url)
     post = Mock()
     login = Mock()
     monkeypatch.setattr(execution_auth.requests, "post", post)
     monkeypatch.setattr(execution_auth.KeycloakClient, "get_token", login)
     assert execution_auth.authenticate_execution() == (
-        None, "app-key", "http://uploads/api/execution/APP/", "ws://socket/api/testembed/")
+        None, "app-key", "http://uploads/api/execution/APP/", ws_url)
+    assert env_file.read_text() == original
     post.assert_not_called()
     login.assert_not_called()
 
@@ -392,6 +432,7 @@ def test_federated_output_is_uploaded_before_terminal_reports(monkeypatch, clien
                     {"participantId": "client", "role": "CLIENT"}]
     start = FederatedTestRunCreateDTO(id=100, participants=participants[::-1] if client_first else participants)
     manager._run_federated(start, RunType.FEDERATED_TEST_RUN)
+    assert federated.LocalFederatedRunner.call_args.kwargs["run_type"] == RunType.FEDERATED_TEST_RUN
     terminal = [call for call in reporter.update_participant.call_args_list
                 if call.kwargs.get("status") in ("FINISHED", "ERROR")]
     if failure == "upload":
