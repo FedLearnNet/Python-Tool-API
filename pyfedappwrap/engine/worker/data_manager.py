@@ -148,7 +148,7 @@ def get_data(
             data[variable_name] = None
             continue
 
-        file_name = re.sub(r"^(https?)\\://", r"\1://", file_name)
+        file_name = re.sub(r"^(https?)\\://", r"\1://", os.fspath(file_name))
         remote_file = is_remote_resource(file_name)
         file_path = file_name if remote_file else os.path.join(data_dir, file_name)
 
