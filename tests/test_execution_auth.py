@@ -431,7 +431,7 @@ def test_federated_output_is_uploaded_before_terminal_reports(monkeypatch, clien
     participants = [{"participantId": "aggregator", "role": "AGGREGATOR"},
                     {"participantId": "client", "role": "CLIENT"}]
     start = FederatedTestRunCreateDTO(id=100, participants=participants[::-1] if client_first else participants)
-    manager._run_federated(start, RunType.FEDERATED_TEST_RUN)
+    manager._start_federated_run_flnet(start, RunType.FEDERATED_TEST_RUN)
     assert federated.LocalFederatedRunner.call_args.kwargs["run_type"] == RunType.FEDERATED_TEST_RUN
     terminal = [call for call in reporter.update_participant.call_args_list
                 if call.kwargs.get("status") in ("FINISHED", "ERROR")]

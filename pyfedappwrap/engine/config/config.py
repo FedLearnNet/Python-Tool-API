@@ -8,6 +8,13 @@ from pydantic.version import VERSION as PYDANTIC_VERSION
 assert PYDANTIC_VERSION >= "2"
 
 
+class CommunicationEngine(str, Enum):
+    """Which federated-learning communication layer a federated tool uses - mirrors Java's
+    bio.cosy.feddb.core.api.app.CommunicationEngine (Learning APIs) and FL-Net-CLI's own enum."""
+    FL_NET = "FL_NET"
+    FLOWER = "FLOWER"
+
+
 class AppType(str, Enum):
     POST_PROCESSING = "POST_PROCESSING"
     EVALUATION = "EVALUATION"
@@ -143,6 +150,8 @@ class LocalAppInfo:
     sourceUrl: Optional[str]
     shortDescription: Optional[str]
     longDescription: Optional[str]
+    # Defaults to FL_NET so app.yml files written before this field existed keep loading.
+    communicationEngine: Optional[CommunicationEngine] = CommunicationEngine.FL_NET
 
 
 @dataclass
@@ -160,4 +169,6 @@ class LocalAppConfig:
 
 @dataclass
 class FederatedAppDTO(LocalAppInfo):
-    appConfig: FederatedAppConfigDTO
+    # Optional only so it can follow LocalAppInfo's now-defaulted communicationEngine field in
+    # dataclass field order; every real call site still always provides it.
+    appConfig: Optional[FederatedAppConfigDTO] = None

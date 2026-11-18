@@ -21,6 +21,7 @@ from pyfedappwrap.engine.federated.reporter import FederatedStatusReporter
 from pyfedappwrap.engine.federated.serializer import FLNetSerializer
 from pyfedappwrap.engine.logger import WebSocketLogger
 from pyfedappwrap.engine.observer.observer import Observer
+from pyfedappwrap.engine.service.flower.lifecycle import FlowerRunLifecycle
 from pyfedappwrap.engine.service.socket.messages.base import BaseSocketMessage
 from pyfedappwrap.engine.service.socket.messages.federated import (
     FederatedParticipantConfigDTO,
@@ -29,6 +30,7 @@ from pyfedappwrap.engine.service.socket.messages.federated import (
 from pyfedappwrap.engine.tests.federated.controller_client import \
     FederatedDockerizedControllerClient
 from pyfedappwrap.engine.tests.federated.runner import LocalFederatedRunner
+from pyfedappwrap.learning.federated.flower_app import FlowerApp
 
 
 class FederatedWorkerManager(Observer):
@@ -40,8 +42,10 @@ class FederatedWorkerManager(Observer):
         self.lifecycle = lifecycle
         self.upload_client = upload_client
         self.available_app: Optional[Any] = None
+        self.available_flower_app: Optional[FlowerApp] = None
         self._aggregators: dict[str, AppAggregator] = {}
         self._active_runs: dict[int, threading.Thread] = {}
+        self._flower_lifecycles: dict[int, FlowerRunLifecycle] = {}
         self._lock = threading.Lock()
         self._serializer = FLNetSerializer()
 
@@ -93,10 +97,17 @@ class FederatedWorkerManager(Observer):
                 logging.info("Federated run %s already running, ignoring duplicate", run_dto.id)
                 return
 
+        # Same message, same entry point either way - just a different method per engine:
+        # an if/else on the communication engine, not a separate message type
+        if run_dto.communication_engine == "FLOWER":
+            target, args = self._start_federated_run_flower, (run_dto, run_type)
+        else:
+            target, args = self._start_federated_run_flnet, (run_dto, run_type, upload_client)
+
         thread = threading.Thread(
-            target=self._run_federated,
+            target=target,
             name=f"fed-run-{run_dto.id}",
-            args=(run_dto, run_type, upload_client),
+            args=args,
             daemon=True,
         )
         with self._lock:
@@ -241,7 +252,67 @@ class FederatedWorkerManager(Observer):
         )
         return config
 
-    def _run_federated(self, run_dto: FederatedTestRunCreateDTO, run_type: Any, upload_client=None) -> None:
+    def _discard_flower_lifecycle(self, run_id: int) -> None:
+        with self._lock:
+            self._flower_lifecycles.pop(run_id, None)
+
+    def _start_federated_run_flower(self, run_dto: FederatedTestRunCreateDTO, run_type: Any) -> None:
+        run_id = run_dto.id
+        reporter = FederatedStatusReporter(self.ws_client, run_id, run_type=RunType.FEDERATED_RUN)
+        reporter.update_run(status="STARTED", current_round=0)
+        try:
+            if self.available_flower_app is None:
+                reporter.finish_run(status="ERROR", error="No Flower app registered")
+                return
+            if len(run_dto.participants) != 1:
+                reporter.finish_run(
+                    status="ERROR",
+                    error=f"A Flower run expects exactly one participant per container, got {len(run_dto.participants)}",
+                )
+                return
+
+            participant = run_dto.participants[0]
+            lifecycle = FlowerRunLifecycle(self.available_flower_app)
+            with self._lock:
+                self._flower_lifecycles[run_id] = lifecycle
+
+            if participant.role == FederatedParticipantType.AGGREGATOR.value:
+                # Blocks this thread until the run finishes - same shape as FL-Net's own
+                # _start_federated_run_flnet below - so the lifecycle is done by the time we get
+                # here and can be discarded.
+                success, error = lifecycle.run_as_aggregator(
+                    report_running=lambda: reporter.update_run(status="RUNNING"),
+                )
+                self._discard_flower_lifecycle(run_id)
+                reporter.finish_run(status="FINISHED" if success else "ERROR", error=error)
+            else:
+                cfg = run_dto.config
+                if not cfg or not cfg.superlink_address:
+                    self._discard_flower_lifecycle(run_id)
+                    reporter.finish_run(
+                        status="ERROR",
+                        error="No SuperLink address provisioned for this Flower client (see "
+                              "FederatedRunConfigDTO.superlink_address)",
+                    )
+                    return
+                lifecycle.start_as_client(
+                    superlink_address=cfg.superlink_address,
+                    root_certificates=Path(cfg.superlink_root_certificates_path)
+                    if cfg.superlink_root_certificates_path else None,
+                    auth_private_key=Path(cfg.supernode_auth_private_key_path)
+                    if cfg.supernode_auth_private_key_path else None,
+                )
+                reporter.update_run(status="RUNNING")
+                # Deliberately NOT discarded here: start_as_client() doesn't block, the
+                # SuperNode keeps running, and this is our only handle to stop it later (when
+                # the orchestrator ends this attempt, the same way every other attempt type's
+                # container lifecycle already ends - see lifecycle.py's module docstring).
+        except Exception as exc:
+            self._discard_flower_lifecycle(run_id)
+            logging.exception("Flower run %s crashed: %s", run_id, exc)
+            reporter.finish_run(status="ERROR", error=f"{type(exc).__name__}: {exc}")
+
+    def _start_federated_run_flnet(self, run_dto: FederatedTestRunCreateDTO, run_type: Any, upload_client=None) -> None:
         upload_client = upload_client or self.upload_client
         run_id = run_dto.id
         execution_type = RunType.FEDERATED_TEST_RUN if self._is_test_run(run_type) else RunType.FEDERATED_RUN

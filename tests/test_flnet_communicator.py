@@ -1018,7 +1018,7 @@ def test_federated_worker_aggregator_only_run_builds_no_training_app(monkeypatch
         "participants": [{"participantId": "platform", "role": "AGGREGATOR"}],
     })
 
-    manager._run_federated(run_dto, RunType.FEDERATED_RUN)
+    manager._start_federated_run_flnet(run_dto, RunType.FEDERATED_RUN)
 
     assert captured["apps"] == {}
     assert captured["round_source_app"] is registered_app

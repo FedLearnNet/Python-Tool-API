@@ -23,7 +23,7 @@ from pyfedappwrap.engine.watcher.run_timing import mark_engine_connected
 from pyfedappwrap.engine.worker.federated_worker_manager import FederatedWorkerManager
 from pyfedappwrap.engine.worker.worker_manager import WorkerManager
 from pyfedappwrap.learning.base_app import BaseApp
-from pyfedappwrap.learning.federated import BaseFederatedApp
+from pyfedappwrap.learning.federated import BaseFederatedApp, FlowerApp
 from pyfedappwrap.transformation.base_transformer import BaseTransformerAPP
 from pyfedappwrap.transformation.config.config_writer import write_transformer_config
 
@@ -180,3 +180,6 @@ class FedDBEngine(threading.Thread):
     def register_aggregator(self, aggregator, key: str = "default"):
         self._aggregators[key] = aggregator
         self.federated_worker_manager.register_aggregator(aggregator, key)
+
+    def register_flower(self, app: FlowerApp):
+        self.federated_worker_manager.available_flower_app = app

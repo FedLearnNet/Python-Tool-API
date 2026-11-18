@@ -33,6 +33,18 @@ class FederatedRunConfigDTO(BaseModel):
     order_client_ids: Annotated[Optional[List[str]], Field(default=None, alias="orderClientIds")]
     max_num_clients: Annotated[Optional[int], Field(default=None, alias="maxNumClients")]
 
+    # Flower-only (CommunicationEngine.FLOWER): the platform's directly-exposed SuperLink
+    # address:port and its TLS CA cert - what #13's Task 4 (Platform -> Client Provisioning)
+    # carries to a clinic's SuperNode, in place of a relay channel. Not yet populated by
+    # Learning APIs as of this writing (that provisioning work is separately scoped) - defined
+    # here so the Python-side SuperNode start-up path (FederatedWorkerManager, see
+    # engine/service/flower/lifecycle.py) has a concrete field to read once it is.
+    superlink_address: Annotated[Optional[str], Field(default=None, alias="superlinkAddress")]
+    superlink_root_certificates_path: Annotated[
+        Optional[str], Field(default=None, alias="superlinkRootCertificatesPath")]
+    supernode_auth_private_key_path: Annotated[
+        Optional[str], Field(default=None, alias="supernodeAuthPrivateKeyPath")]
+
 class FederatedParticipantConfigDTO(BaseModel):
     """Participant as sent in the create payload and returned by the backend."""
     model_config = ConfigDict(populate_by_name=True, extra="allow")
@@ -62,6 +74,12 @@ class FederatedTestRunCreateDTO(BaseModel):
     config: Optional[FederatedRunConfigDTO] = None
     output_data: Annotated[Optional[dict[str, Any]], Field(default=None, alias="outputData")]
     participants: List[FederatedParticipantConfigDTO] = []
+    # "FL_NET" (default, for backward compatibility with senders that predate this field) or
+    # "FLOWER" - which engine's path FederatedWorkerManager dispatches this start to. Kept as a
+    # bare tag on the existing message (not a new message type) per Julian's review: "can't the
+    # logic of START_FEDERATED_RUN not just have an if else statement based on the communication
+    # engine?" - see Flower_Integration_Plan.md's resolved #13<->#11 contract.
+    communication_engine: Annotated[str, Field(default="FL_NET", alias="communicationEngine")]
 
 
 class FederatedParticipantUpdateDTO(BaseModel):
