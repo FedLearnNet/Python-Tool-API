@@ -37,14 +37,20 @@ class FlowerRunLifecycle:
             self,
             *,
             port: int = DEFAULT_SUPERLINK_PORT,
-            enable_supernode_auth: bool = True,
+            enable_supernode_auth: bool = False,
             poll_interval: float = DEFAULT_POLL_INTERVAL_SECONDS,
             report_running: Optional[callable] = None,
     ) -> tuple[bool, Optional[str]]:
         """Starts the SuperLink, submits the run, polls until Flower reports it finished.
         Returns (success, error_message). Blocks the calling thread until the run is done or the
         SuperLink process dies - callers run this on their own worker thread, same as FL-Net's
-        own `_run_federated`."""
+        own `_run_federated`.
+
+        `enable_supernode_auth` defaults to False because this runs in `--insecure` mode (no TLS
+        yet - see Flower_Integration_Plan.md's flagged TLS gap): Flower refuses to start with
+        `--enable-supernode-auth` set without TLS ("the flag requires encrypted TLS
+        communications", exit code 104) - confirmed by actually starting a SuperLink with both
+        flags set. Passing True before TLS is wired up would crash every aggregator run."""
         args = ["--insecure", "--host", "0.0.0.0", "--port", str(port)]
         if enable_supernode_auth:
             args.append("--enable-supernode-auth")

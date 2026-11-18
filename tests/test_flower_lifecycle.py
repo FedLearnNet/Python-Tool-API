@@ -50,7 +50,10 @@ def fake_federation_config(monkeypatch):
     monkeypatch.setattr(lifecycle_module, "ensure_local_federation", lambda port: "flnet-local")
 
 
-def test_run_as_aggregator_starts_superlink_with_auth_by_default():
+def test_run_as_aggregator_starts_superlink_insecure_without_supernode_auth_by_default():
+    """--enable-supernode-auth requires TLS, which this still runs without (see
+    Flower_Integration_Plan.md's flagged TLS gap) - confirmed Flower itself refuses to start
+    (exit code 104) with --insecure and --enable-supernode-auth both set."""
     lc = FlowerRunLifecycle(FlowerApp(app_dir="flower_app"), cli=Mock())
     lc.cli.run.return_value = "123"
     lc.cli.list_run.return_value = {"status": "finished:completed"}
@@ -61,19 +64,19 @@ def test_run_as_aggregator_starts_superlink_with_auth_by_default():
     assert error is None
     supervisor = FakeSupervisor.instances[0]
     assert supervisor.binary == "flower-superlink"
-    assert supervisor.args == ["--insecure", "--host", "0.0.0.0", "--port", "9000", "--enable-supernode-auth"]
+    assert supervisor.args == ["--insecure", "--host", "0.0.0.0", "--port", "9000"]
     assert supervisor.started
     assert supervisor.stopped
 
 
-def test_run_as_aggregator_can_disable_supernode_auth():
+def test_run_as_aggregator_can_enable_supernode_auth_once_tls_is_available():
     lc = FlowerRunLifecycle(FlowerApp(), cli=Mock())
     lc.cli.run.return_value = "1"
     lc.cli.list_run.return_value = {"status": "finished:completed"}
 
-    lc.run_as_aggregator(enable_supernode_auth=False)
+    lc.run_as_aggregator(enable_supernode_auth=True)
 
-    assert "--enable-supernode-auth" not in FakeSupervisor.instances[0].args
+    assert "--enable-supernode-auth" in FakeSupervisor.instances[0].args
 
 
 def test_run_as_aggregator_calls_report_running_once_the_superlink_is_up():
