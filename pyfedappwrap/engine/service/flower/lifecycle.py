@@ -38,6 +38,9 @@ class FlowerRunLifecycle:
             *,
             port: int = DEFAULT_SUPERLINK_PORT,
             enable_supernode_auth: bool = False,
+            ssl_certfile: Optional[Path] = None,
+            ssl_keyfile: Optional[Path] = None,
+            ssl_ca_certfile: Optional[Path] = None,
             poll_interval: float = DEFAULT_POLL_INTERVAL_SECONDS,
             report_running: Optional[callable] = None,
     ) -> tuple[bool, Optional[str]]:
@@ -46,18 +49,27 @@ class FlowerRunLifecycle:
         SuperLink process dies - callers run this on their own worker thread, same as FL-Net's
         own `_run_federated`.
 
-        `enable_supernode_auth` defaults to False because this runs in `--insecure` mode (no TLS
-        yet - see Flower_Integration_Plan.md's flagged TLS gap): Flower refuses to start with
-        `--enable-supernode-auth` set without TLS ("the flag requires encrypted TLS
-        communications", exit code 104) - confirmed by actually starting a SuperLink with both
-        flags set. Passing True before TLS is wired up would crash every aggregator run."""
-        args = ["--insecure", "--host", "0.0.0.0", "--port", str(port)]
+        Runs `--insecure` unless all three of `ssl_certfile`/`ssl_keyfile`/`ssl_ca_certfile` are
+        given (platform-side TLS provisioning is separately scoped - see
+        Flower_Integration_Plan.md's Task 4). `enable_supernode_auth` defaults to False even with
+        TLS enabled: Flower refuses to start with `--enable-supernode-auth` set without TLS ("the
+        flag requires encrypted TLS communications", exit code 104, confirmed by actually
+        starting a SuperLink with both flags set) - passing True before SuperNode registration
+        (Task 5) exists would reject every SuperNode connection outright."""
+        tls_enabled = bool(ssl_certfile and ssl_keyfile and ssl_ca_certfile)
+        if tls_enabled:
+            args = ["--ssl-certfile", str(ssl_certfile), "--ssl-keyfile", str(ssl_keyfile),
+                    "--ssl-ca-certfile", str(ssl_ca_certfile),
+                    "--host", "0.0.0.0", "--port", str(port)]
+        else:
+            args = ["--insecure", "--host", "0.0.0.0", "--port", str(port)]
         if enable_supernode_auth:
             args.append("--enable-supernode-auth")
         self._supervisor = FlowerProcessSupervisor("flower-superlink", args)
         self._supervisor.start()
         try:
-            federation = ensure_local_federation(port)
+            federation = ensure_local_federation(
+                port, ca_certfile=ssl_ca_certfile if tls_enabled else None)
             if report_running:
                 report_running()
             flower_run_id = self.cli.run(self.flower_app.app_dir, federation)

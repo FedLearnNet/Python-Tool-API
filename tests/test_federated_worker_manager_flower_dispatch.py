@@ -34,9 +34,11 @@ class _FakeFlowerRunLifecycle:
         self.aggregator_result: tuple[bool, Any] = (True, None)
         self.client_calls: list[dict] = []
         self.report_running_was_called = False
+        self.aggregator_kwargs: dict = {}
         _FakeFlowerRunLifecycle.instances.append(self)
 
     def run_as_aggregator(self, *, report_running=None, **kwargs):
+        self.aggregator_kwargs = kwargs
         if report_running:
             report_running()
             self.report_running_was_called = True
@@ -86,9 +88,51 @@ def test_a_flower_tagged_aggregator_run_starts_the_superlink_and_reports_finishe
 
     manager._start_federated_run_flower(aggregator_run_dto(), RunType.FEDERATED_RUN)
 
-    assert ws_client.statuses() == ["STARTED", "RUNNING", "FINISHED"]
+    # One RUNNING update reports the freshly-generated CA certificate, right after STARTED and
+    # before the SuperLink itself reports running - see FederatedTrainingSetupBO's caching.
+    assert ws_client.statuses() == ["STARTED", "RUNNING", "RUNNING", "FINISHED"]
     assert _FakeFlowerRunLifecycle.instances[0].report_running_was_called
     assert manager._flower_lifecycles == {}
+
+
+def test_an_aggregator_run_reports_its_freshly_generated_ca_certificate():
+    ws_client = _RecordingWsClient()
+    manager = make_manager(ws_client)
+
+    manager._start_federated_run_flower(aggregator_run_dto(), RunType.FEDERATED_RUN)
+
+    reports = [m.message for m in ws_client.messages if m.message.ca_certificate]
+    assert len(reports) == 1
+    assert "BEGIN CERTIFICATE" in reports[0].ca_certificate
+    assert "BEGIN PRIVATE KEY" in reports[0].ca_private_key
+
+
+def test_an_aggregator_run_reuses_the_stored_ca_and_does_not_report_it_again(tmp_path):
+    from pyfedappwrap.engine.service.flower import certs
+    stored = certs.ensure_ca_and_leaf_cert(tmp_path, ["127.0.0.1"])
+    ws_client = _RecordingWsClient()
+    manager = make_manager(ws_client)
+
+    manager._start_federated_run_flower(aggregator_run_dto(config={
+        "caCertificate": stored.ca_cert_pem, "caPrivateKey": stored.ca_key_pem,
+    }), RunType.FEDERATED_RUN)
+
+    assert [m.message.ca_certificate for m in ws_client.messages if m.message.ca_certificate] == []
+    assert ws_client.statuses() == ["STARTED", "RUNNING", "FINISHED"]
+    ca_path = _FakeFlowerRunLifecycle.instances[0].aggregator_kwargs["ssl_ca_certfile"]
+    assert ca_path.read_text() == stored.ca_cert_pem
+
+
+def test_an_aggregator_run_passes_its_generated_cert_paths_to_run_as_aggregator():
+    ws_client = _RecordingWsClient()
+    manager = make_manager(ws_client)
+
+    manager._start_federated_run_flower(aggregator_run_dto(), RunType.FEDERATED_RUN)
+
+    lifecycle = _FakeFlowerRunLifecycle.instances[0]
+    assert lifecycle.aggregator_kwargs["ssl_certfile"].name == "server.pem"
+    assert lifecycle.aggregator_kwargs["ssl_keyfile"].name == "server.key"
+    assert lifecycle.aggregator_kwargs["ssl_ca_certfile"].name == "ca.crt"
 
 
 def test_an_aggregator_run_that_fails_reports_error_with_the_failure_reason():
@@ -125,6 +169,22 @@ def test_a_flower_tagged_client_run_starts_the_supernode_and_keeps_its_lifecycle
         "auth_private_key": None,
     }]
     assert manager._flower_lifecycles[2] is lifecycle
+
+
+def test_a_client_run_with_a_provisioned_ca_certificate_writes_it_locally_and_uses_it():
+    ws_client = _RecordingWsClient()
+    manager = make_manager(ws_client)
+    run_dto = client_run_dto(config={
+        "superlinkAddress": "platform.example:8000",
+        "caCertificate": "-----BEGIN CERTIFICATE-----\nfake\n-----END CERTIFICATE-----\n",
+    })
+
+    manager._start_federated_run_flower(run_dto, RunType.FEDERATED_RUN)
+
+    lifecycle = _FakeFlowerRunLifecycle.instances[0]
+    [call] = lifecycle.client_calls
+    assert call["root_certificates"].name == "ca.crt"
+    assert call["root_certificates"].read_text() == run_dto.config.ca_certificate
 
 
 def test_a_client_run_with_no_provisioned_superlink_address_reports_error():

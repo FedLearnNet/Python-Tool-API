@@ -35,11 +35,21 @@ class FederatedRunConfigDTO(BaseModel):
 
     # Flower-only (CommunicationEngine.FLOWER): the platform's directly-exposed SuperLink
     # address:port and its TLS CA cert - what #13's Task 4 (Platform -> Client Provisioning)
-    # carries to a clinic's SuperNode, in place of a relay channel. Not yet populated by
-    # Learning APIs as of this writing (that provisioning work is separately scoped) - defined
-    # here so the Python-side SuperNode start-up path (FederatedWorkerManager, see
-    # engine/service/flower/lifecycle.py) has a concrete field to read once it is.
+    # carries to a clinic's SuperNode, in place of a relay channel.
     superlink_address: Annotated[Optional[str], Field(default=None, alias="superlinkAddress")]
+    # CA certificate CONTENT (PEM text), not a path - Learning APIs caches and forwards whatever
+    # the platform's aggregator last reported (see FederatedTestRunCreateDTO.ca_certificate
+    # below); FederatedWorkerManager writes it to a local file itself before passing a path into
+    # FlowerRunLifecycle.start_as_client (see certs.write_ca_certificate). May be absent (the
+    # platform's very first Flower run ever, before any CA has been generated and cached) - the
+    # client then falls back to `--insecure`, same as today, until a later run has one to send.
+    ca_certificate: Annotated[Optional[str], Field(default=None, alias="caCertificate")]
+    # Platform aggregator only, never sent to a clinic: the private key of the stored CA above
+    # (PEM, PKCS8), so the aggregator signs its new leaf cert with the same CA the run's clinics
+    # were already given, instead of generating a new CA every run (see certs.py).
+    ca_private_key: Annotated[Optional[str], Field(default=None, alias="caPrivateKey")]
+    # Retained for a local path provided directly (e.g. local testing) without going through the
+    # ca_certificate content field above.
     superlink_root_certificates_path: Annotated[
         Optional[str], Field(default=None, alias="superlinkRootCertificatesPath")]
     supernode_auth_private_key_path: Annotated[
@@ -74,6 +84,12 @@ class FederatedTestRunCreateDTO(BaseModel):
     config: Optional[FederatedRunConfigDTO] = None
     output_data: Annotated[Optional[dict[str, Any]], Field(default=None, alias="outputData")]
     participants: List[FederatedParticipantConfigDTO] = []
+    # Flower-only: a CA cert and its private key the platform aggregator has just generated
+    # (none was stored yet, or the stored one was about to expire), reported up once (see
+    # FederatedStatusReporter.report_ca_certificate) so Learning APIs stores both, hands the cert
+    # to clinics and the pair back to the aggregator on later runs. Absent on every other message.
+    ca_certificate: Annotated[Optional[str], Field(default=None, alias="caCertificate")]
+    ca_private_key: Annotated[Optional[str], Field(default=None, alias="caPrivateKey")]
     # "FL_NET" (default, for backward compatibility with senders that predate this field) or
     # "FLOWER" - which engine's path FederatedWorkerManager dispatches this start to. Kept as a
     # bare tag on the existing message (not a new message type) per Julian's review: "can't the

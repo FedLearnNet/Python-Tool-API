@@ -21,6 +21,7 @@ from pyfedappwrap.engine.federated.reporter import FederatedStatusReporter
 from pyfedappwrap.engine.federated.serializer import FLNetSerializer
 from pyfedappwrap.engine.logger import WebSocketLogger
 from pyfedappwrap.engine.observer.observer import Observer
+from pyfedappwrap.engine.service.flower import certs as flower_certs
 from pyfedappwrap.engine.service.flower.lifecycle import FlowerRunLifecycle
 from pyfedappwrap.engine.service.socket.messages.base import BaseSocketMessage
 from pyfedappwrap.engine.service.socket.messages.federated import (
@@ -277,10 +278,31 @@ class FederatedWorkerManager(Observer):
                 self._flower_lifecycles[run_id] = lifecycle
 
             if participant.role == FederatedParticipantType.AGGREGATOR.value:
+                cert_dir = Path(f"/tmp/fedrun/{run_id}/certs")
+                leaf_hostnames = ["0.0.0.0", "127.0.0.1"]
+                cfg = run_dto.config
+                own_address = cfg.superlink_address if cfg else None
+                if own_address:
+                    # host[:port] -> the leaf cert's SAN must cover whatever hostname/IP a
+                    # clinic's SuperNode actually dials, or TLS hostname verification fails even
+                    # with the right CA - loopback alone (above) is not enough.
+                    leaf_hostnames.append(own_address.rsplit(":", 1)[0])
+                # Reuse the CA Learning APIs stored (the same one this run's clinics were given);
+                # only a newly generated one needs reporting back up.
+                ca_and_leaf = flower_certs.ensure_ca_and_leaf_cert(
+                    cert_dir, leaf_hostnames,
+                    ca_cert_pem=cfg.ca_certificate if cfg else None,
+                    ca_key_pem=cfg.ca_private_key if cfg else None,
+                )
+                if ca_and_leaf.ca_is_new:
+                    reporter.report_ca_certificate(ca_and_leaf.ca_cert_pem, ca_and_leaf.ca_key_pem)
                 # Blocks this thread until the run finishes - same shape as FL-Net's own
                 # _start_federated_run_flnet below - so the lifecycle is done by the time we get
                 # here and can be discarded.
                 success, error = lifecycle.run_as_aggregator(
+                    ssl_certfile=ca_and_leaf.leaf_cert_path,
+                    ssl_keyfile=ca_and_leaf.leaf_key_path,
+                    ssl_ca_certfile=ca_and_leaf.ca_cert_path,
                     report_running=lambda: reporter.update_run(status="RUNNING"),
                 )
                 self._discard_flower_lifecycle(run_id)
@@ -295,10 +317,15 @@ class FederatedWorkerManager(Observer):
                               "FederatedRunConfigDTO.superlink_address)",
                     )
                     return
+                root_certificates = None
+                if cfg.ca_certificate:
+                    root_certificates = flower_certs.write_ca_certificate(
+                        Path(f"/tmp/fedrun/{run_id}/certs"), cfg.ca_certificate)
+                elif cfg.superlink_root_certificates_path:
+                    root_certificates = Path(cfg.superlink_root_certificates_path)
                 lifecycle.start_as_client(
                     superlink_address=cfg.superlink_address,
-                    root_certificates=Path(cfg.superlink_root_certificates_path)
-                    if cfg.superlink_root_certificates_path else None,
+                    root_certificates=root_certificates,
                     auth_private_key=Path(cfg.supernode_auth_private_key_path)
                     if cfg.supernode_auth_private_key_path else None,
                 )

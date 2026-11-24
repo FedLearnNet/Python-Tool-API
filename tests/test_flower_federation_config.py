@@ -53,6 +53,25 @@ def test_updates_the_port_on_a_later_call_without_duplicating_the_section(flwr_h
     assert "127.0.0.1:8000" not in content
 
 
+def test_writes_root_certificates_instead_of_insecure_when_a_ca_certfile_is_given(flwr_home):
+    name = fc.ensure_local_federation(8000, ca_certfile=fc.Path("/certs/ca.crt"))
+
+    assert name == "flnet-local"
+    content = fc.config_toml_path().read_text(encoding="utf-8")
+    assert '[superlink.flnet-local]\naddress = "127.0.0.1:8000"\nroot-certificates = "/certs/ca.crt"' in content
+    assert "insecure" not in content
+
+
+def test_switching_from_insecure_to_tls_replaces_the_section_without_duplicating_it(flwr_home):
+    fc.ensure_local_federation(8000)
+    fc.ensure_local_federation(8000, ca_certfile=fc.Path("/certs/ca.crt"))
+
+    content = fc.config_toml_path().read_text(encoding="utf-8")
+    assert content.count("[superlink.flnet-local]") == 1
+    assert "insecure" not in content
+    assert 'root-certificates = "/certs/ca.crt"' in content
+
+
 def test_preserves_unrelated_existing_sections(flwr_home):
     fc.config_toml_path().parent.mkdir(parents=True, exist_ok=True)
     fc.config_toml_path().write_text(

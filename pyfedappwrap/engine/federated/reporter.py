@@ -40,7 +40,9 @@ class FederatedStatusReporter:
 
     def update_run(self, status: str, current_round: Optional[int] = None,
                    error: Optional[str] = None,
-                   output_data: Optional[dict[str, Any]] = None) -> None:
+                   output_data: Optional[dict[str, Any]] = None,
+                   ca_certificate: Optional[str] = None,
+                   ca_private_key: Optional[str] = None) -> None:
         if self.ws_client is None:
             return
         dto = FederatedTestRunCreateDTO(
@@ -49,8 +51,15 @@ class FederatedStatusReporter:
             current_round=current_round,
             error=error,
             output_data=output_data,
+            ca_certificate=ca_certificate,
+            ca_private_key=ca_private_key,
         )
         self.ws_client.send(SendFederatedUpdateRunDTO(message=dto, run_type=self.run_type))
+
+    def report_ca_certificate(self, ca_cert_pem: str, ca_key_pem: str) -> None:
+        """Flower aggregator only: reports a newly generated CA (cert and key) so Learning APIs
+        stores it and reuses it for every later run - see certs.py."""
+        self.update_run(status="RUNNING", ca_certificate=ca_cert_pem, ca_private_key=ca_key_pem)
 
     def finish_run(self, status: str = "FINISHED", current_round: Optional[int] = None,
                    error: Optional[str] = None,

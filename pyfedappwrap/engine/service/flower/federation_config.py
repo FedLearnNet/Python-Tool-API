@@ -6,15 +6,23 @@ Confirmed empirically (read in full, then verified by actually running `flwr con
 inspecting the file Flower itself generated) that this - not `pyproject.toml`'s older
 `[tool.flwr.federations.<name>]` - is where connection details live on the actually-installed
 latest Flower release. Only ever writes our own fixed-name entry, pointed at the aggregator's
-own embedded SuperLink (`127.0.0.1:<port>`, loopback only, so `insecure` is fine regardless of
-whether the Fleet API facing clinics uses TLS) - never touches any other section a developer or
+own embedded SuperLink (`127.0.0.1:<port>`) - never touches any other section a developer or
 `flwr` itself may have written.
+
+Loopback is NOT automatically exempt from TLS: a SuperLink's Control/Runtime/Fleet APIs all
+share one port and one TLS configuration (confirmed empirically by starting a real
+`flower-superlink` with `--ssl-certfile`/`--ssl-keyfile`/`--ssl-ca-certfile` and observing that
+`flwr run`/`flwr list` against it over loopback with `insecure = true` fails with "Connection to
+the SuperLink is unavailable", while the identical call with `root-certificates` set to the same
+CA succeeds) - this corrects an earlier, untested assumption in this module. Once the SuperLink
+this federation entry targets runs with TLS enabled, `ca_certfile` must be passed here too.
 """
 from __future__ import annotations
 
 import os
 import re
 from pathlib import Path
+from typing import Optional
 
 FEDERATION_NAME = "flnet-local"
 
@@ -37,10 +45,17 @@ def config_toml_path() -> Path:
     return flwr_home() / "config.toml"
 
 
-def ensure_local_federation(port: int, *, name: str = FEDERATION_NAME) -> str:
-    """Idempotently points `[superlink.<name>]` at 127.0.0.1:<port>. Returns `name`."""
+def ensure_local_federation(port: int, *, name: str = FEDERATION_NAME,
+                             ca_certfile: Optional[Path] = None) -> str:
+    """Idempotently points `[superlink.<name>]` at 127.0.0.1:<port>. Returns `name`. Pass
+    `ca_certfile` when the SuperLink at that port is running with TLS enabled - see the module
+    docstring for why loopback still needs this."""
     path = config_toml_path()
-    section = f"[superlink.{name}]\naddress = \"127.0.0.1:{port}\"\ninsecure = true\n"
+    if ca_certfile is not None:
+        connection = f"root-certificates = \"{ca_certfile}\""
+    else:
+        connection = "insecure = true"
+    section = f"[superlink.{name}]\naddress = \"127.0.0.1:{port}\"\n{connection}\n"
 
     existing = path.read_text(encoding="utf-8") if path.exists() else ""
     without_section = _SECTION_RE.sub("", existing).rstrip("\n")

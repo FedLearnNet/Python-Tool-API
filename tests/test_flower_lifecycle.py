@@ -47,7 +47,10 @@ def fake_supervisor(monkeypatch):
 
 @pytest.fixture(autouse=True)
 def fake_federation_config(monkeypatch):
-    monkeypatch.setattr(lifecycle_module, "ensure_local_federation", lambda port: "flnet-local")
+    calls = []
+    monkeypatch.setattr(lifecycle_module, "ensure_local_federation",
+                         lambda port, ca_certfile=None: (calls.append(ca_certfile), "flnet-local")[1])
+    return calls
 
 
 def test_run_as_aggregator_starts_superlink_insecure_without_supernode_auth_by_default():
@@ -67,6 +70,42 @@ def test_run_as_aggregator_starts_superlink_insecure_without_supernode_auth_by_d
     assert supervisor.args == ["--insecure", "--host", "0.0.0.0", "--port", "9000"]
     assert supervisor.started
     assert supervisor.stopped
+
+
+def test_run_as_aggregator_uses_tls_flags_when_all_three_cert_paths_are_given(fake_federation_config):
+    lc = FlowerRunLifecycle(FlowerApp(), cli=Mock())
+    lc.cli.run.return_value = "1"
+    lc.cli.list_run.return_value = {"status": "finished:completed"}
+
+    lc.run_as_aggregator(
+        port=9000,
+        ssl_certfile=Path("/certs/server.pem"),
+        ssl_keyfile=Path("/certs/server.key"),
+        ssl_ca_certfile=Path("/certs/ca.crt"),
+    )
+
+    supervisor = FakeSupervisor.instances[0]
+    assert supervisor.args == [
+        "--ssl-certfile", "/certs/server.pem",
+        "--ssl-keyfile", "/certs/server.key",
+        "--ssl-ca-certfile", "/certs/ca.crt",
+        "--host", "0.0.0.0", "--port", "9000",
+    ]
+    # The loopback flwr run/list control calls need root-certificates too once TLS is enabled -
+    # confirmed empirically (see federation_config.py's module docstring).
+    assert fake_federation_config == [Path("/certs/ca.crt")]
+
+
+def test_run_as_aggregator_falls_back_to_insecure_when_only_some_cert_paths_are_given(fake_federation_config):
+    lc = FlowerRunLifecycle(FlowerApp(), cli=Mock())
+    lc.cli.run.return_value = "1"
+    lc.cli.list_run.return_value = {"status": "finished:completed"}
+
+    lc.run_as_aggregator(ssl_certfile=Path("/certs/server.pem"))
+
+    default_port = str(lifecycle_module.DEFAULT_SUPERLINK_PORT)
+    assert FakeSupervisor.instances[0].args == ["--insecure", "--host", "0.0.0.0", "--port", default_port]
+    assert fake_federation_config == [None]
 
 
 def test_run_as_aggregator_can_enable_supernode_auth_once_tls_is_available():
