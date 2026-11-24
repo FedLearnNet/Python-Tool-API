@@ -1,4 +1,4 @@
-"""Thin wrapper around the `flwr` CLI's `run`/`list`/`stop` subcommands.
+"""Thin wrapper around the `flwr` CLI's `run`/`list`/`stop`/`supernode register` subcommands.
 
 Confirmed empirically (set up a real local SuperLink + two SuperNodes and ran the actual CLI
 against them, Flower 1.43.0 - see `Flower_Integration_Plan.md`'s "Empirically verified" section)
@@ -59,6 +59,24 @@ class FlowerCli:
         if not response.get("success"):
             raise FlowerCliError(f"flwr stop failed: {response.get('error-message', response)}")
 
+    def supernode_register(self, public_key_file: Path, federation: str, *,
+                           name: Optional[str] = None) -> str:
+        """`flwr supernode register PUBLIC_KEY [SUPERLINK]` - adds a SuperNode's OpenSSH EC
+        public key to a SuperLink started with `--enable-supernode-auth`; returns its node-id.
+        Confirmed on 1.43.0 against a real TLS SuperLink: `{"success": true, "node-id": <int>}`,
+        and a key that is already registered fails with `error-message` containing "Public key
+        already in use" (see `is_already_registered`)."""
+        args = ["supernode", "register", str(public_key_file), federation, "--format", "json"]
+        if name:
+            args += ["--name", name]
+        response = self._invoke(args)
+        if not response.get("success"):
+            raise FlowerCliError(f"flwr supernode register failed: {response.get('error-message', response)}")
+        node_id = response.get("node-id")
+        if node_id is None:
+            raise FlowerCliError(f"flwr supernode register reported success without a node-id: {response}")
+        return str(node_id)
+
     def _invoke(self, args: list[str]) -> dict[str, Any]:
         command = [self.binary, *args]
         logging.info("Running: %s", " ".join(command))
@@ -77,6 +95,12 @@ class FlowerCli:
             return json.loads(output)
         except json.JSONDecodeError as exc:
             raise FlowerCliError(f"{' '.join(command)} returned non-JSON output: {output}") from exc
+
+
+def is_already_registered(error: FlowerCliError) -> bool:
+    """Registering the same public key twice is refused by Flower 1.43 with "Public key already
+    in use" - for a retried registration request that just means the first one went through."""
+    return "already in use" in str(error)
 
 
 def status_is_finished(status: Optional[str]) -> bool:

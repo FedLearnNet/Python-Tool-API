@@ -35,26 +35,33 @@ from cryptography.x509.oid import NameOID
 
 _CERT_VALIDITY = datetime.timedelta(days=397)  # under the ~398-day CA/Browser Forum cap
 _CURVE = ec.SECP384R1()
-# A stored CA closer than this to expiry is replaced instead of reused, so a run never starts
-# with a CA that expires mid-run.
+# A stored CA closer than this to expiry is still used for the current run (its clinics were
+# already given it) but a replacement is generated and reported, so later runs switch over well
+# before it actually expires.
 _CA_RENEWAL_MARGIN = datetime.timedelta(days=30)
 
 
 @dataclass(frozen=True)
-class CaAndLeafCert:
-    ca_cert_pem: str
-    ca_key_pem: str
-    # True when this call generated a new CA (none given, or the given one was about to expire);
-    # the caller must then report it up so Learning APIs stores it for later runs.
-    ca_is_new: bool
+class SuperlinkTlsFiles:
     ca_cert_path: Path
     leaf_cert_path: Path
     leaf_key_path: Path
 
 
 @dataclass(frozen=True)
+class SuperlinkTls:
+    # The files to start the SuperLink with TLS, or None when it must run `--insecure` this run:
+    # the SuperLink may only present a leaf signed by the CA this run's clinics were given, and
+    # with no usable stored CA there is none (see `prepare_superlink_tls`).
+    files: Optional[SuperlinkTlsFiles]
+    # A newly generated CA (cert PEM, key PEM) the caller must report so Learning APIs stores it
+    # for later runs; None when the stored CA is reused as-is.
+    ca_to_report: Optional[tuple[str, str]]
+
+
+@dataclass(frozen=True)
 class SupernodeKeyPair:
-    public_key_pem: str
+    public_key: str  # OpenSSH format, e.g. "ecdsa-sha2-nistp384 AAAA..."
     private_key_path: Path
 
 
@@ -104,48 +111,66 @@ def _leaf_cert(ca_key: ec.EllipticCurvePrivateKey, ca_cert: x509.Certificate,
 
 def _load_ca(ca_cert_pem: str, ca_key_pem: str) -> Optional[
         tuple[ec.EllipticCurvePrivateKey, x509.Certificate]]:
-    """The given CA, or None when it can't be used (unparseable, mismatched key, or within
-    `_CA_RENEWAL_MARGIN` of expiry) and a new one must be generated instead."""
+    """The given CA, or None when it can't be used at all (unparseable, mismatched key, or
+    already expired)."""
     try:
         cert = x509.load_pem_x509_certificate(ca_cert_pem.encode("ascii"))
         key = serialization.load_pem_private_key(ca_key_pem.encode("ascii"), password=None)
     except ValueError:
-        logging.warning("Stored Flower CA could not be parsed; generating a new one")
+        logging.error("Stored Flower CA could not be parsed")
         return None
     if not isinstance(key, ec.EllipticCurvePrivateKey) or key.public_key() != cert.public_key():
-        logging.warning("Stored Flower CA key does not match its certificate; generating a new one")
+        logging.error("Stored Flower CA key does not match its certificate")
         return None
-    remaining = cert.not_valid_after_utc - datetime.datetime.now(datetime.timezone.utc)
-    if remaining < _CA_RENEWAL_MARGIN:
-        logging.info("Stored Flower CA expires on %s; generating a new one",
-                     cert.not_valid_after_utc)
+    if cert.not_valid_after_utc <= datetime.datetime.now(datetime.timezone.utc):
+        logging.error("Stored Flower CA expired on %s", cert.not_valid_after_utc)
         return None
     return key, cert
 
 
-def ensure_ca_and_leaf_cert(directory: Path, leaf_hostnames: list[str], *,
-                            ca_cert_pem: Optional[str] = None,
-                            ca_key_pem: Optional[str] = None) -> CaAndLeafCert:
-    """Writes `ca.crt`/`server.pem`/`server.key` under `directory`. Reuses the given CA when it
-    is usable (see `_load_ca`), otherwise generates a new one; the leaf cert is always new, so
-    its SANs always match the current `leaf_hostnames`."""
+def _pem_pair(key: ec.EllipticCurvePrivateKey, cert: x509.Certificate) -> tuple[str, str]:
+    return (
+        cert.public_bytes(serialization.Encoding.PEM).decode("ascii"),
+        key.private_bytes(
+            serialization.Encoding.PEM,
+            serialization.PrivateFormat.PKCS8,
+            serialization.NoEncryption(),
+        ).decode("ascii"),
+    )
+
+
+def prepare_superlink_tls(directory: Path, leaf_hostnames: list[str], *,
+                          ca_cert_pem: Optional[str] = None,
+                          ca_key_pem: Optional[str] = None) -> SuperlinkTls:
+    """Decides how the platform's SuperLink runs this run, given the stored CA Learning APIs
+    sent (the same one this run's clinics got as `--root-certificates`):
+
+    - usable stored CA: write `ca.crt` and a fresh `server.pem`/`server.key` signed by it under
+      `directory` (fresh leaf, so its SANs always match `leaf_hostnames`) -> TLS. If it expires
+      within `_CA_RENEWAL_MARGIN`, also generate a replacement to report for later runs.
+    - no stored CA (the platform's very first Flower run) or an unusable one: generate a new CA
+      to report, and run `--insecure` this once - TLS with a CA the clinics weren't given could
+      never connect. Every later run then gets TLS (see Flower_Integration_Plan.md, Task 4).
+    """
+    loaded = _load_ca(ca_cert_pem, ca_key_pem) if ca_cert_pem and ca_key_pem else None
+    if loaded is None:
+        new_key, new_cert = _self_signed_ca()
+        return SuperlinkTls(files=None, ca_to_report=_pem_pair(new_key, new_cert))
+
+    ca_key, ca_cert = loaded
+    ca_to_report = None
+    remaining = ca_cert.not_valid_after_utc - datetime.datetime.now(datetime.timezone.utc)
+    if remaining < _CA_RENEWAL_MARGIN:
+        logging.info("Stored Flower CA expires on %s; reporting a replacement for later runs",
+                     ca_cert.not_valid_after_utc)
+        ca_to_report = _pem_pair(*_self_signed_ca())
+
     directory.mkdir(parents=True, exist_ok=True)
     ca_path = directory / "ca.crt"
     leaf_cert_path = directory / "server.pem"
     leaf_key_path = directory / "server.key"
-
-    loaded = _load_ca(ca_cert_pem, ca_key_pem) if ca_cert_pem and ca_key_pem else None
-    ca_is_new = loaded is None
-    ca_key, ca_cert = _self_signed_ca() if loaded is None else loaded
     leaf_key, leaf_cert = _leaf_cert(ca_key, ca_cert, leaf_hostnames)
-
-    out_ca_cert_pem = ca_cert.public_bytes(serialization.Encoding.PEM).decode("ascii")
-    out_ca_key_pem = ca_key.private_bytes(
-        serialization.Encoding.PEM,
-        serialization.PrivateFormat.PKCS8,
-        serialization.NoEncryption(),
-    ).decode("ascii")
-    ca_path.write_text(out_ca_cert_pem, encoding="utf-8")
+    ca_path.write_text(_pem_pair(ca_key, ca_cert)[0], encoding="utf-8")
     leaf_cert_path.write_bytes(leaf_cert.public_bytes(serialization.Encoding.PEM))
     leaf_key_path.write_bytes(leaf_key.private_bytes(
         serialization.Encoding.PEM,
@@ -153,20 +178,17 @@ def ensure_ca_and_leaf_cert(directory: Path, leaf_hostnames: list[str], *,
         serialization.NoEncryption(),
     ))
     leaf_key_path.chmod(0o600)
-    return CaAndLeafCert(
-        ca_cert_pem=out_ca_cert_pem,
-        ca_key_pem=out_ca_key_pem,
-        ca_is_new=ca_is_new,
-        ca_cert_path=ca_path,
-        leaf_cert_path=leaf_cert_path,
-        leaf_key_path=leaf_key_path,
+    return SuperlinkTls(
+        files=SuperlinkTlsFiles(ca_cert_path=ca_path, leaf_cert_path=leaf_cert_path,
+                                leaf_key_path=leaf_key_path),
+        ca_to_report=ca_to_report,
     )
 
 
 def write_ca_certificate(directory: Path, ca_cert_pem: str) -> Path:
     """Writes CA cert content received from Learning APIs to a local file for a clinic's
     SuperNode (`--root-certificates`) to use. The clinic never generates its own CA - only the
-    platform's aggregator does (see `ensure_ca_and_leaf_cert`)."""
+    platform's aggregator does (see `prepare_superlink_tls`)."""
     directory.mkdir(parents=True, exist_ok=True)
     path = directory / "ca.crt"
     path.write_text(ca_cert_pem, encoding="utf-8")
@@ -174,20 +196,23 @@ def write_ca_certificate(directory: Path, ca_cert_pem: str) -> Path:
 
 
 def generate_supernode_keypair(directory: Path) -> SupernodeKeyPair:
-    """A SuperNode's own EC auth keypair, independent of the CA/leaf-cert TLS material above -
-    confirmed via `flower-federated-learning` to be a separate, application-layer mechanism. The
-    private key is written to `directory` and never returned as content - only the public key
-    (which must reach the platform's aggregator for registration) is."""
+    """A SuperNode's own EC auth keypair, independent of the CA/leaf-cert TLS material above.
+    Both halves are in OpenSSH format - confirmed against Flower 1.43's own code:
+    `flower-supernode --auth-supernode-private-key` loads it with `load_ssh_private_key`, and
+    `flwr supernode register` with `load_ssh_public_key` (a PEM key fails with "Unsupported key
+    type"), on a NIST curve. The private key is written to `directory` (mode 0600) and never
+    returned as content - only the public key, which the platform's aggregator registers, is."""
     directory.mkdir(parents=True, exist_ok=True)
     private_key_path = directory / "supernode_private_key"
     key = ec.generate_private_key(_CURVE)
     private_key_path.write_bytes(key.private_bytes(
         serialization.Encoding.PEM,
-        serialization.PrivateFormat.PKCS8,
+        serialization.PrivateFormat.OpenSSH,
         serialization.NoEncryption(),
     ))
-    public_key_pem = key.public_key().public_bytes(
-        serialization.Encoding.PEM,
-        serialization.PublicFormat.SubjectPublicKeyInfo,
+    private_key_path.chmod(0o600)
+    public_key_ssh = key.public_key().public_bytes(
+        serialization.Encoding.OpenSSH,
+        serialization.PublicFormat.OpenSSH,
     ).decode("ascii")
-    return SupernodeKeyPair(public_key_pem=public_key_pem, private_key_path=private_key_path)
+    return SupernodeKeyPair(public_key=public_key_ssh, private_key_path=private_key_path)

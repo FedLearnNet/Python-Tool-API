@@ -14,11 +14,19 @@ finishes, the same way it already does for every other attempt type - see
 from __future__ import annotations
 
 import logging
+import tempfile
+import threading
 import time
 from pathlib import Path
 from typing import Optional
 
-from pyfedappwrap.engine.service.flower.cli import FlowerCli, status_is_finished, status_is_successful
+from pyfedappwrap.engine.service.flower.cli import (
+    FlowerCli,
+    FlowerCliError,
+    is_already_registered,
+    status_is_finished,
+    status_is_successful,
+)
 from pyfedappwrap.engine.service.flower.federation_config import ensure_local_federation
 from pyfedappwrap.engine.service.flower.process import FlowerProcessError, FlowerProcessSupervisor
 from pyfedappwrap.learning.federated.flower_app import FlowerApp
@@ -32,12 +40,18 @@ class FlowerRunLifecycle:
         self.flower_app = flower_app
         self.cli = cli or FlowerCli()
         self._supervisor: Optional[FlowerProcessSupervisor] = None
+        # Aggregator only: set once the SuperLink is up and the local federation entry points at
+        # it, so `register_supernode` (called from the websocket thread) knows it can reach it.
+        self._federation: Optional[str] = None
+        self._supernode_auth = False
+        self._registered_keys: set[str] = set()
+        self._register_lock = threading.Lock()
 
     def run_as_aggregator(
             self,
             *,
             port: int = DEFAULT_SUPERLINK_PORT,
-            enable_supernode_auth: bool = False,
+            enable_supernode_auth: Optional[bool] = None,
             ssl_certfile: Optional[Path] = None,
             ssl_keyfile: Optional[Path] = None,
             ssl_ca_certfile: Optional[Path] = None,
@@ -50,13 +64,13 @@ class FlowerRunLifecycle:
         own `_run_federated`.
 
         Runs `--insecure` unless all three of `ssl_certfile`/`ssl_keyfile`/`ssl_ca_certfile` are
-        given (platform-side TLS provisioning is separately scoped - see
-        Flower_Integration_Plan.md's Task 4). `enable_supernode_auth` defaults to False even with
-        TLS enabled: Flower refuses to start with `--enable-supernode-auth` set without TLS ("the
-        flag requires encrypted TLS communications", exit code 104, confirmed by actually
-        starting a SuperLink with both flags set) - passing True before SuperNode registration
-        (Task 5) exists would reject every SuperNode connection outright."""
+        given. `enable_supernode_auth` defaults to "on exactly when TLS is": with it, only
+        SuperNodes registered through `register_supernode` may connect (Task 5). It can't be on
+        without TLS - Flower refuses to start ("the flag requires encrypted TLS
+        communications", exit code 104, confirmed by actually starting a SuperLink with both)."""
         tls_enabled = bool(ssl_certfile and ssl_keyfile and ssl_ca_certfile)
+        if enable_supernode_auth is None:
+            enable_supernode_auth = tls_enabled
         if tls_enabled:
             args = ["--ssl-certfile", str(ssl_certfile), "--ssl-keyfile", str(ssl_keyfile),
                     "--ssl-ca-certfile", str(ssl_ca_certfile),
@@ -70,6 +84,8 @@ class FlowerRunLifecycle:
         try:
             federation = ensure_local_federation(
                 port, ca_certfile=ssl_ca_certfile if tls_enabled else None)
+            self._supernode_auth = enable_supernode_auth
+            self._federation = federation
             if report_running:
                 report_running()
             flower_run_id = self.cli.run(self.flower_app.app_dir, federation)
@@ -90,7 +106,35 @@ class FlowerRunLifecycle:
         except FlowerProcessError as exc:
             return False, str(exc)
         finally:
+            self._federation = None
             self._supervisor.stop()
+
+    def register_supernode(self, public_key: str, *, name: Optional[str] = None) -> None:
+        """Aggregator only: allows a clinic's SuperNode (by its OpenSSH EC public key) to connect
+        to this run's SuperLink. Safe to call again for the same key - a clinic retries until it
+        hears back, so a repeat just succeeds. Raises FlowerCliError while the SuperLink isn't
+        up yet (the clinic retries) or when Flower refuses the key."""
+        federation = self._federation
+        if federation is None:
+            raise FlowerCliError("The SuperLink of this run is not running yet")
+        if not self._supernode_auth:
+            # No allowlist to add to - any SuperNode may connect (first, insecure run).
+            return
+        with self._register_lock:
+            if public_key in self._registered_keys:
+                return
+            with tempfile.NamedTemporaryFile("w", suffix=".pub", delete=False) as key_file:
+                key_file.write(public_key)
+            key_path = Path(key_file.name)
+            try:
+                node_id = self.cli.supernode_register(key_path, federation, name=name)
+                logging.info("Registered SuperNode %s as node %s", name or "", node_id)
+            except FlowerCliError as exc:
+                if not is_already_registered(exc):
+                    raise
+            finally:
+                key_path.unlink(missing_ok=True)
+            self._registered_keys.add(public_key)
 
     def start_as_client(
             self,

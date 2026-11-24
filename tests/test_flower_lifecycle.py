@@ -1,9 +1,11 @@
+import threading
 from pathlib import Path
 from unittest.mock import Mock, call
 
 import pytest
 
 from pyfedappwrap.engine.service.flower import lifecycle as lifecycle_module
+from pyfedappwrap.engine.service.flower.cli import FlowerCliError
 from pyfedappwrap.engine.service.flower.lifecycle import FlowerRunLifecycle
 from pyfedappwrap.engine.service.flower.process import FlowerProcessError
 from pyfedappwrap.learning.federated.flower_app import FlowerApp
@@ -54,9 +56,8 @@ def fake_federation_config(monkeypatch):
 
 
 def test_run_as_aggregator_starts_superlink_insecure_without_supernode_auth_by_default():
-    """--enable-supernode-auth requires TLS, which this still runs without (see
-    Flower_Integration_Plan.md's flagged TLS gap) - confirmed Flower itself refuses to start
-    (exit code 104) with --insecure and --enable-supernode-auth both set."""
+    """--enable-supernode-auth requires TLS, so it stays off without it - confirmed Flower
+    itself refuses to start (exit code 104) with --insecure and --enable-supernode-auth set."""
     lc = FlowerRunLifecycle(FlowerApp(app_dir="flower_app"), cli=Mock())
     lc.cli.run.return_value = "123"
     lc.cli.list_run.return_value = {"status": "finished:completed"}
@@ -90,6 +91,8 @@ def test_run_as_aggregator_uses_tls_flags_when_all_three_cert_paths_are_given(fa
         "--ssl-keyfile", "/certs/server.key",
         "--ssl-ca-certfile", "/certs/ca.crt",
         "--host", "0.0.0.0", "--port", "9000",
+        # With TLS, only registered SuperNodes may connect (Task 5).
+        "--enable-supernode-auth",
     ]
     # The loopback flwr run/list control calls need root-certificates too once TLS is enabled -
     # confirmed empirically (see federation_config.py's module docstring).
@@ -235,3 +238,81 @@ def test_is_alive_reflects_the_supervised_process():
 
     lc.stop()
     assert lc.is_alive() is False
+
+
+def _running_aggregator(cli, *, tls=True):
+    """A lifecycle whose SuperLink is up: run_as_aggregator blocks in list_run until released."""
+    lc = FlowerRunLifecycle(FlowerApp(), cli=cli)
+    cli.run.return_value = "1"
+    release = threading.Event()
+    up = threading.Event()
+
+    def list_run(federation, run_id):
+        up.set()
+        release.wait(5)
+        return {"status": "finished:completed"}
+
+    cli.list_run.side_effect = list_run
+    kwargs = dict(ssl_certfile=Path("/c/s.pem"), ssl_keyfile=Path("/c/s.key"),
+                  ssl_ca_certfile=Path("/c/ca.crt")) if tls else {}
+    thread = threading.Thread(target=lc.run_as_aggregator, kwargs=kwargs, daemon=True)
+    thread.start()
+    assert up.wait(5)
+    return lc, release, thread
+
+
+def test_register_supernode_before_the_superlink_is_up_raises_so_the_clinic_retries():
+    lc = FlowerRunLifecycle(FlowerApp(), cli=Mock())
+
+    with pytest.raises(FlowerCliError, match="not running yet"):
+        lc.register_supernode("ecdsa-sha2-nistp384 AAAA")
+
+
+def test_register_supernode_registers_the_key_once_even_when_asked_again():
+    cli = Mock()
+    cli.supernode_register.return_value = "42"
+    lc, release, thread = _running_aggregator(cli)
+
+    lc.register_supernode("ecdsa-sha2-nistp384 AAAA", name="clinic-1")
+    lc.register_supernode("ecdsa-sha2-nistp384 AAAA", name="clinic-1")
+
+    cli.supernode_register.assert_called_once()
+    key_file, federation = cli.supernode_register.call_args.args
+    assert federation == "flnet-local"
+    assert cli.supernode_register.call_args.kwargs == {"name": "clinic-1"}
+    assert not key_file.exists()  # the temporary key file is cleaned up
+    release.set()
+    thread.join(5)
+
+
+def test_register_supernode_treats_an_already_registered_key_as_success():
+    cli = Mock()
+    cli.supernode_register.side_effect = FlowerCliError(
+        "flwr supernode register failed: [code: 23] Public key already in use.")
+    lc, release, thread = _running_aggregator(cli)
+
+    lc.register_supernode("ecdsa-sha2-nistp384 AAAA")
+
+    release.set()
+    thread.join(5)
+
+
+def test_register_supernode_is_a_no_op_while_running_without_supernode_auth():
+    cli = Mock()
+    lc, release, thread = _running_aggregator(cli, tls=False)
+
+    lc.register_supernode("ecdsa-sha2-nistp384 AAAA")
+
+    cli.supernode_register.assert_not_called()
+    release.set()
+    thread.join(5)
+
+
+def test_register_supernode_after_the_run_ended_raises():
+    cli = Mock()
+    lc, release, thread = _running_aggregator(cli)
+    release.set()
+    thread.join(5)
+
+    with pytest.raises(FlowerCliError):
+        lc.register_supernode("ecdsa-sha2-nistp384 AAAA")

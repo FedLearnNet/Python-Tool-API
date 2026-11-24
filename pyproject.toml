@@ -44,7 +44,7 @@ dependencies = [
     "numpy>=1.26.4,<3",
     "pandas>=2.2,<3",
     "validators~=0.35.0",
-    "cryptography~=44.0",
+    "cryptography>=42,<51",  # flwr 1.43 itself requires >=50,<51
 ]
 
 [project.optional-dependencies]

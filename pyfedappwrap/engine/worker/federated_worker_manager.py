@@ -5,6 +5,8 @@ import copy
 import logging
 import shutil
 import threading
+import time
+import uuid
 from pathlib import Path
 from typing import Any, Optional
 
@@ -22,16 +24,28 @@ from pyfedappwrap.engine.federated.serializer import FLNetSerializer
 from pyfedappwrap.engine.logger import WebSocketLogger
 from pyfedappwrap.engine.observer.observer import Observer
 from pyfedappwrap.engine.service.flower import certs as flower_certs
+from pyfedappwrap.engine.service.flower.cli import FlowerCliError
 from pyfedappwrap.engine.service.flower.lifecycle import FlowerRunLifecycle
 from pyfedappwrap.engine.service.socket.messages.base import BaseSocketMessage
 from pyfedappwrap.engine.service.socket.messages.federated import (
     FederatedParticipantConfigDTO,
     FederatedTestRunCreateDTO,
+    FlowerSupernodeKeyDTO,
+    FlowerSupernodeRegisteredDTO,
+    SendFlowerSupernodeKeyDTO,
+    SendFlowerSupernodeRegisteredDTO,
 )
 from pyfedappwrap.engine.tests.federated.controller_client import \
     FederatedDockerizedControllerClient
 from pyfedappwrap.engine.tests.federated.runner import LocalFederatedRunner
 from pyfedappwrap.learning.federated.flower_app import FlowerApp
+
+
+# A clinic re-sends its SuperNode public key this often until the platform's aggregator confirms
+# the registration - the aggregator's SuperLink may not be up yet, and nothing on the way
+# (local, global) keeps the request - and gives up after the timeout.
+SUPERNODE_REGISTRATION_RETRY_SECONDS = 10.0
+SUPERNODE_REGISTRATION_TIMEOUT_SECONDS = 600.0
 
 
 class FederatedWorkerManager(Observer):
@@ -47,6 +61,10 @@ class FederatedWorkerManager(Observer):
         self._aggregators: dict[str, AppAggregator] = {}
         self._active_runs: dict[int, threading.Thread] = {}
         self._flower_lifecycles: dict[int, FlowerRunLifecycle] = {}
+        # Aggregator container: the lifecycle running this run's SuperLink, which registers the
+        # clinics' SuperNode keys. Clinic container: its own registration requests in flight.
+        self._flower_aggregator: Optional[FlowerRunLifecycle] = None
+        self._pending_registrations: dict[str, tuple[threading.Event, list]] = {}
         self._lock = threading.Lock()
         self._serializer = FLNetSerializer()
 
@@ -64,6 +82,12 @@ class FederatedWorkerManager(Observer):
             return
         event_type = getattr(event, "type", None)
         if event_type is None:
+            return
+        if WebsocketMessageTypes.FLOWER_SUPERNODE_KEY.equals(event_type):
+            self._on_supernode_key(getattr(event, "message", None))
+            return
+        if WebsocketMessageTypes.FLOWER_SUPERNODE_REGISTERED.equals(event_type):
+            self._on_supernode_registered(getattr(event, "message", None))
             return
         if not (
                 WebsocketMessageTypes.START_FEDERATED_RUN.equals(event_type)
@@ -287,24 +311,30 @@ class FederatedWorkerManager(Observer):
                     # clinic's SuperNode actually dials, or TLS hostname verification fails even
                     # with the right CA - loopback alone (above) is not enough.
                     leaf_hostnames.append(own_address.rsplit(":", 1)[0])
-                # Reuse the CA Learning APIs stored (the same one this run's clinics were given);
-                # only a newly generated one needs reporting back up.
-                ca_and_leaf = flower_certs.ensure_ca_and_leaf_cert(
+                # The SuperLink only runs TLS with the stored CA this run's clinics were also
+                # given; a newly generated CA is reported up for later runs (see certs.py).
+                tls = flower_certs.prepare_superlink_tls(
                     cert_dir, leaf_hostnames,
                     ca_cert_pem=cfg.ca_certificate if cfg else None,
                     ca_key_pem=cfg.ca_private_key if cfg else None,
                 )
-                if ca_and_leaf.ca_is_new:
-                    reporter.report_ca_certificate(ca_and_leaf.ca_cert_pem, ca_and_leaf.ca_key_pem)
+                if tls.ca_to_report:
+                    reporter.report_ca_certificate(*tls.ca_to_report)
                 # Blocks this thread until the run finishes - same shape as FL-Net's own
                 # _start_federated_run_flnet below - so the lifecycle is done by the time we get
                 # here and can be discarded.
-                success, error = lifecycle.run_as_aggregator(
-                    ssl_certfile=ca_and_leaf.leaf_cert_path,
-                    ssl_keyfile=ca_and_leaf.leaf_key_path,
-                    ssl_ca_certfile=ca_and_leaf.ca_cert_path,
-                    report_running=lambda: reporter.update_run(status="RUNNING"),
-                )
+                with self._lock:
+                    self._flower_aggregator = lifecycle
+                try:
+                    success, error = lifecycle.run_as_aggregator(
+                        ssl_certfile=tls.files.leaf_cert_path if tls.files else None,
+                        ssl_keyfile=tls.files.leaf_key_path if tls.files else None,
+                        ssl_ca_certfile=tls.files.ca_cert_path if tls.files else None,
+                        report_running=lambda: reporter.update_run(status="RUNNING"),
+                    )
+                finally:
+                    with self._lock:
+                        self._flower_aggregator = None
                 self._discard_flower_lifecycle(run_id)
                 reporter.finish_run(status="FINISHED" if success else "ERROR", error=error)
             else:
@@ -323,11 +353,20 @@ class FederatedWorkerManager(Observer):
                         Path(f"/tmp/fedrun/{run_id}/certs"), cfg.ca_certificate)
                 elif cfg.superlink_root_certificates_path:
                     root_certificates = Path(cfg.superlink_root_certificates_path)
+                auth_private_key = (Path(cfg.supernode_auth_private_key_path)
+                                    if cfg.supernode_auth_private_key_path else None)
+                if root_certificates is not None and auth_private_key is None:
+                    # With TLS the platform's SuperLink only admits registered SuperNodes
+                    # (--enable-supernode-auth); without it (first run) there's nothing to do.
+                    auth_private_key, error = self._register_supernode(run_id)
+                    if auth_private_key is None:
+                        self._discard_flower_lifecycle(run_id)
+                        reporter.finish_run(status="ERROR", error=error)
+                        return
                 lifecycle.start_as_client(
                     superlink_address=cfg.superlink_address,
                     root_certificates=root_certificates,
-                    auth_private_key=Path(cfg.supernode_auth_private_key_path)
-                    if cfg.supernode_auth_private_key_path else None,
+                    auth_private_key=auth_private_key,
                 )
                 reporter.update_run(status="RUNNING")
                 # Deliberately NOT discarded here: start_as_client() doesn't block, the
@@ -338,6 +377,80 @@ class FederatedWorkerManager(Observer):
             self._discard_flower_lifecycle(run_id)
             logging.exception("Flower run %s crashed: %s", run_id, exc)
             reporter.finish_run(status="ERROR", error=f"{type(exc).__name__}: {exc}")
+
+    def _register_supernode(self, run_id: int) -> tuple[Optional[Path], Optional[str]]:
+        """Clinic: generates this SuperNode's auth keypair and has the platform's aggregator
+        register its public key, re-sending until confirmed. Returns (private key path, None), or
+        (None, error) when the aggregator refuses it or never answers in time."""
+        keypair = flower_certs.generate_supernode_keypair(Path(f"/tmp/fedrun/{run_id}/supernode"))
+        request_id = str(uuid.uuid4())
+        answered = threading.Event()
+        answer: list[FlowerSupernodeRegisteredDTO] = []
+        with self._lock:
+            self._pending_registrations[request_id] = (answered, answer)
+        deadline = time.monotonic() + SUPERNODE_REGISTRATION_TIMEOUT_SECONDS
+        last_error = "the platform's aggregator did not answer"
+        try:
+            while time.monotonic() < deadline:
+                self.ws_client.send(SendFlowerSupernodeKeyDTO(message=FlowerSupernodeKeyDTO(
+                    request_id=request_id, public_key=keypair.public_key)))
+                if answered.wait(SUPERNODE_REGISTRATION_RETRY_SECONDS):
+                    if answer[0].success:
+                        logging.info("SuperNode of run %s is registered with the platform", run_id)
+                        return keypair.private_key_path, None
+                    # Usually "SuperLink not running yet" - wait for the next round.
+                    last_error = answer[0].error or "registration refused"
+                    logging.info("SuperNode registration of run %s not done yet: %s",
+                                 run_id, last_error)
+                    answered.clear()
+                    answer.clear()
+                    time.sleep(SUPERNODE_REGISTRATION_RETRY_SECONDS)
+        finally:
+            with self._lock:
+                self._pending_registrations.pop(request_id, None)
+        return None, (f"SuperNode was not registered with the platform within "
+                      f"{SUPERNODE_REGISTRATION_TIMEOUT_SECONDS:.0f}s: {last_error}")
+
+    def _on_supernode_registered(self, message: Any) -> None:
+        """Clinic: the aggregator's answer to one of our registration requests."""
+        try:
+            answer = FlowerSupernodeRegisteredDTO.model_validate(
+                message.model_dump(by_alias=True) if hasattr(message, "model_dump") else message)
+        except ValueError:
+            logging.warning("Ignoring malformed SuperNode registration answer")
+            return
+        with self._lock:
+            pending = self._pending_registrations.get(answer.request_id)
+        if pending is None:
+            return
+        answered, answers = pending
+        answers[:] = [answer]
+        answered.set()
+
+    def _on_supernode_key(self, message: Any) -> None:
+        """Aggregator: registers a clinic's SuperNode key with this run's SuperLink and answers.
+        Runs off the websocket thread - the `flwr` call can take a few seconds."""
+        try:
+            request = FlowerSupernodeKeyDTO.model_validate(
+                message.model_dump(by_alias=True) if hasattr(message, "model_dump") else message)
+        except ValueError:
+            logging.warning("Ignoring malformed SuperNode registration request")
+            return
+        threading.Thread(target=self._register_supernode_key, args=(request,),
+                         name=f"flower-register-{request.request_id}", daemon=True).start()
+
+    def _register_supernode_key(self, request: FlowerSupernodeKeyDTO) -> None:
+        with self._lock:
+            lifecycle = self._flower_aggregator
+        try:
+            if lifecycle is None:
+                raise FlowerCliError("No Flower aggregator is running in this container")
+            lifecycle.register_supernode(request.public_key, name=request.name)
+            answer = FlowerSupernodeRegisteredDTO(request_id=request.request_id, success=True)
+        except FlowerCliError as exc:
+            answer = FlowerSupernodeRegisteredDTO(request_id=request.request_id, success=False,
+                                                  error=str(exc))
+        self.ws_client.send(SendFlowerSupernodeRegisteredDTO(message=answer))
 
     def _start_federated_run_flnet(self, run_dto: FederatedTestRunCreateDTO, run_type: Any, upload_client=None) -> None:
         upload_client = upload_client or self.upload_client

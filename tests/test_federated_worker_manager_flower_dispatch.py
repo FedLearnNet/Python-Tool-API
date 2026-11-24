@@ -1,11 +1,13 @@
 """The START_FEDERATED_RUN dispatch split Julian approved: same message, same entry point,
 routed to _start_federated_run_flower vs _start_federated_run_flnet by communicationEngine."""
+import time
 from typing import Any
 
 import pytest
 
-from pyfedappwrap.engine.enums.test_embed_states import RunType
+from pyfedappwrap.engine.enums.test_embed_states import RunType, WebsocketMessageTypes
 from pyfedappwrap.engine.runtime_lifecycle import EngineLifecycle
+from pyfedappwrap.engine.service.socket.messages.base import BaseSocketMessage
 from pyfedappwrap.engine.service.socket.messages.federated import FederatedTestRunCreateDTO
 from pyfedappwrap.engine.worker import federated_worker_manager
 from pyfedappwrap.engine.worker.federated_worker_manager import FederatedWorkerManager
@@ -15,15 +17,28 @@ from pyfedappwrap.learning.federated.flower_app import FlowerApp
 class _RecordingWsClient:
     def __init__(self):
         self.messages = []
+        self.manager = None
+        # (success, error) answers the "platform" gives to SuperNode key requests, in order;
+        # None leaves a request unanswered.
+        self.registration_answers: list = []
 
     def register(self, observer):
         pass
 
     def send(self, message):
         self.messages.append(message)
+        if message.type == WebsocketMessageTypes.FLOWER_SUPERNODE_KEY and self.registration_answers:
+            answer = self.registration_answers.pop(0)
+            if answer is not None:
+                success, error = answer
+                self.manager._on_supernode_registered({
+                    "requestId": message.message.request_id, "success": success, "error": error})
 
     def statuses(self) -> list[str]:
-        return [m.message.status for m in self.messages]
+        return [m.message.status for m in self.messages if hasattr(m.message, "status")]
+
+    def of_type(self, message_type) -> list:
+        return [m.message for m in self.messages if m.type == message_type]
 
 
 class _FakeFlowerRunLifecycle:
@@ -35,6 +50,8 @@ class _FakeFlowerRunLifecycle:
         self.client_calls: list[dict] = []
         self.report_running_was_called = False
         self.aggregator_kwargs: dict = {}
+        self.registered: list = []
+        self.register_error = None
         _FakeFlowerRunLifecycle.instances.append(self)
 
     def run_as_aggregator(self, *, report_running=None, **kwargs):
@@ -47,6 +64,11 @@ class _FakeFlowerRunLifecycle:
     def start_as_client(self, **kwargs):
         self.client_calls.append(kwargs)
 
+    def register_supernode(self, public_key, *, name=None):
+        self.registered.append((public_key, name))
+        if self.register_error:
+            raise self.register_error
+
 
 @pytest.fixture(autouse=True)
 def fake_lifecycle(monkeypatch):
@@ -56,7 +78,9 @@ def fake_lifecycle(monkeypatch):
 
 
 def make_manager(ws_client=None, flower_app=None):
-    manager = FederatedWorkerManager(ws_client or _RecordingWsClient(), EngineLifecycle())
+    ws_client = ws_client or _RecordingWsClient()
+    manager = FederatedWorkerManager(ws_client, EngineLifecycle())
+    ws_client.manager = manager
     manager.available_flower_app = flower_app if flower_app is not None else FlowerApp()
     return manager
 
@@ -88,8 +112,8 @@ def test_a_flower_tagged_aggregator_run_starts_the_superlink_and_reports_finishe
 
     manager._start_federated_run_flower(aggregator_run_dto(), RunType.FEDERATED_RUN)
 
-    # One RUNNING update reports the freshly-generated CA certificate, right after STARTED and
-    # before the SuperLink itself reports running - see FederatedTrainingSetupBO's caching.
+    # No stored CA yet (first run): one RUNNING update reports the newly generated CA, right
+    # after STARTED and before the SuperLink itself reports running.
     assert ws_client.statuses() == ["STARTED", "RUNNING", "RUNNING", "FINISHED"]
     assert _FakeFlowerRunLifecycle.instances[0].report_running_was_called
     assert manager._flower_lifecycles == {}
@@ -109,30 +133,44 @@ def test_an_aggregator_run_reports_its_freshly_generated_ca_certificate():
 
 def test_an_aggregator_run_reuses_the_stored_ca_and_does_not_report_it_again(tmp_path):
     from pyfedappwrap.engine.service.flower import certs
-    stored = certs.ensure_ca_and_leaf_cert(tmp_path, ["127.0.0.1"])
+    cert_pem, key_pem = certs._pem_pair(*certs._self_signed_ca())
     ws_client = _RecordingWsClient()
     manager = make_manager(ws_client)
 
     manager._start_federated_run_flower(aggregator_run_dto(config={
-        "caCertificate": stored.ca_cert_pem, "caPrivateKey": stored.ca_key_pem,
+        "caCertificate": cert_pem, "caPrivateKey": key_pem,
     }), RunType.FEDERATED_RUN)
 
     assert [m.message.ca_certificate for m in ws_client.messages if m.message.ca_certificate] == []
     assert ws_client.statuses() == ["STARTED", "RUNNING", "FINISHED"]
     ca_path = _FakeFlowerRunLifecycle.instances[0].aggregator_kwargs["ssl_ca_certfile"]
-    assert ca_path.read_text() == stored.ca_cert_pem
+    assert ca_path.read_text() == cert_pem
 
 
-def test_an_aggregator_run_passes_its_generated_cert_paths_to_run_as_aggregator():
-    ws_client = _RecordingWsClient()
-    manager = make_manager(ws_client)
+def test_an_aggregator_run_with_a_stored_ca_passes_tls_cert_paths_to_run_as_aggregator():
+    from pyfedappwrap.engine.service.flower import certs
+    cert_pem, key_pem = certs._pem_pair(*certs._self_signed_ca())
+    manager = make_manager(_RecordingWsClient())
 
-    manager._start_federated_run_flower(aggregator_run_dto(), RunType.FEDERATED_RUN)
+    manager._start_federated_run_flower(aggregator_run_dto(config={
+        "caCertificate": cert_pem, "caPrivateKey": key_pem,
+    }), RunType.FEDERATED_RUN)
 
     lifecycle = _FakeFlowerRunLifecycle.instances[0]
     assert lifecycle.aggregator_kwargs["ssl_certfile"].name == "server.pem"
     assert lifecycle.aggregator_kwargs["ssl_keyfile"].name == "server.key"
     assert lifecycle.aggregator_kwargs["ssl_ca_certfile"].name == "ca.crt"
+
+
+def test_the_first_aggregator_run_without_a_stored_ca_runs_insecure():
+    manager = make_manager(_RecordingWsClient())
+
+    manager._start_federated_run_flower(aggregator_run_dto(), RunType.FEDERATED_RUN)
+
+    kwargs = _FakeFlowerRunLifecycle.instances[0].aggregator_kwargs
+    assert kwargs["ssl_certfile"] is None
+    assert kwargs["ssl_keyfile"] is None
+    assert kwargs["ssl_ca_certfile"] is None
 
 
 def test_an_aggregator_run_that_fails_reports_error_with_the_failure_reason():
@@ -173,6 +211,7 @@ def test_a_flower_tagged_client_run_starts_the_supernode_and_keeps_its_lifecycle
 
 def test_a_client_run_with_a_provisioned_ca_certificate_writes_it_locally_and_uses_it():
     ws_client = _RecordingWsClient()
+    ws_client.registration_answers = [(True, None)]
     manager = make_manager(ws_client)
     run_dto = client_run_dto(config={
         "superlinkAddress": "platform.example:8000",
@@ -241,3 +280,112 @@ def test_the_default_communication_engine_still_routes_to_the_fl_net_path(monkey
 
     assert len(calls) == 1
     assert calls[0][0] == "flnet"
+
+
+CA_PEM = "-----BEGIN CERTIFICATE-----\nfake\n-----END CERTIFICATE-----\n"
+
+
+def tls_client_run_dto():
+    return client_run_dto(config={"superlinkAddress": "platform.example:8000", "caCertificate": CA_PEM})
+
+
+@pytest.fixture
+def fast_registration(monkeypatch):
+    monkeypatch.setattr(federated_worker_manager, "SUPERNODE_REGISTRATION_RETRY_SECONDS", 0.01)
+    monkeypatch.setattr(federated_worker_manager, "SUPERNODE_REGISTRATION_TIMEOUT_SECONDS", 0.5)
+
+
+def test_a_tls_client_registers_its_supernode_key_before_starting_and_uses_its_private_key():
+    ws_client = _RecordingWsClient()
+    ws_client.registration_answers = [(True, None)]
+    manager = make_manager(ws_client)
+
+    manager._start_federated_run_flower(tls_client_run_dto(), RunType.FEDERATED_RUN)
+
+    [request] = ws_client.of_type(WebsocketMessageTypes.FLOWER_SUPERNODE_KEY)
+    assert request.public_key.startswith("ecdsa-sha2-nistp384 ")
+    [call] = _FakeFlowerRunLifecycle.instances[0].client_calls
+    assert b"OPENSSH PRIVATE KEY" in call["auth_private_key"].read_bytes()
+    assert ws_client.statuses() == ["STARTED", "RUNNING"]
+    assert manager._pending_registrations == {}
+
+
+def test_a_tls_client_keeps_asking_while_the_aggregator_is_not_ready(fast_registration):
+    ws_client = _RecordingWsClient()
+    ws_client.registration_answers = [(False, "The SuperLink of this run is not running yet"),
+                                      None, (True, None)]
+    manager = make_manager(ws_client)
+
+    manager._start_federated_run_flower(tls_client_run_dto(), RunType.FEDERATED_RUN)
+
+    requests = ws_client.of_type(WebsocketMessageTypes.FLOWER_SUPERNODE_KEY)
+    assert len(requests) == 3
+    # One request id for the whole registration, so a late answer still matches.
+    assert len({r.request_id for r in requests}) == 1
+    assert _FakeFlowerRunLifecycle.instances[0].client_calls[0]["auth_private_key"] is not None
+
+
+def test_a_tls_client_that_is_never_registered_fails_without_starting_its_supernode(fast_registration):
+    ws_client = _RecordingWsClient()
+    manager = make_manager(ws_client)
+
+    manager._start_federated_run_flower(tls_client_run_dto(), RunType.FEDERATED_RUN)
+
+    assert _FakeFlowerRunLifecycle.instances[0].client_calls == []
+    assert ws_client.statuses() == ["STARTED", "ERROR"]
+    assert "not registered" in ws_client.messages[-1].message.error
+    assert manager._flower_lifecycles == {}
+
+
+def test_a_client_without_a_ca_certificate_skips_registration():
+    """First run on a fresh platform: no CA yet, so the SuperLink runs insecure without auth."""
+    ws_client = _RecordingWsClient()
+    manager = make_manager(ws_client)
+
+    manager._start_federated_run_flower(client_run_dto(), RunType.FEDERATED_RUN)
+
+    assert ws_client.of_type(WebsocketMessageTypes.FLOWER_SUPERNODE_KEY) == []
+    [call] = _FakeFlowerRunLifecycle.instances[0].client_calls
+    assert call["auth_private_key"] is None
+
+
+def _wait_for(predicate, timeout=5.0):
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline:
+        if predicate():
+            return
+        time.sleep(0.01)
+    raise AssertionError("condition not met in time")
+
+
+def test_the_aggregator_registers_a_clinic_key_and_answers_success():
+    ws_client = _RecordingWsClient()
+    manager = make_manager(ws_client)
+    aggregator = _FakeFlowerRunLifecycle(FlowerApp())
+    manager._flower_aggregator = aggregator
+
+    manager.update(_event(WebsocketMessageTypes.FLOWER_SUPERNODE_KEY, {
+        "requestId": "r1", "publicKey": "ecdsa-sha2-nistp384 AAAA", "name": "clinic-1"}))
+
+    _wait_for(lambda: ws_client.of_type(WebsocketMessageTypes.FLOWER_SUPERNODE_REGISTERED))
+    [answer] = ws_client.of_type(WebsocketMessageTypes.FLOWER_SUPERNODE_REGISTERED)
+    assert (answer.request_id, answer.success) == ("r1", True)
+    assert aggregator.registered == [("ecdsa-sha2-nistp384 AAAA", "clinic-1")]
+
+
+def test_the_aggregator_answers_failure_while_no_superlink_is_running():
+    ws_client = _RecordingWsClient()
+    manager = make_manager(ws_client)
+
+    manager.update(_event(WebsocketMessageTypes.FLOWER_SUPERNODE_KEY, {
+        "requestId": "r1", "publicKey": "ecdsa-sha2-nistp384 AAAA"}))
+
+    _wait_for(lambda: ws_client.of_type(WebsocketMessageTypes.FLOWER_SUPERNODE_REGISTERED))
+    [answer] = ws_client.of_type(WebsocketMessageTypes.FLOWER_SUPERNODE_REGISTERED)
+    assert answer.success is False
+    assert answer.error
+
+
+def _event(message_type, message):
+    return BaseSocketMessage.model_validate({
+        "type": message_type.value, "runType": "FEDERATED_RUN", "message": message})

@@ -47,7 +47,7 @@ class FederatedRunConfigDTO(BaseModel):
     # Platform aggregator only, never sent to a clinic: the private key of the stored CA above
     # (PEM, PKCS8), so the aggregator signs its new leaf cert with the same CA the run's clinics
     # were already given, instead of generating a new CA every run (see certs.py).
-    ca_private_key: Annotated[Optional[str], Field(default=None, alias="caPrivateKey")]
+    ca_private_key: Annotated[Optional[str], Field(default=None, alias="caPrivateKey", repr=False)]
     # Retained for a local path provided directly (e.g. local testing) without going through the
     # ca_certificate content field above.
     superlink_root_certificates_path: Annotated[
@@ -89,7 +89,7 @@ class FederatedTestRunCreateDTO(BaseModel):
     # FederatedStatusReporter.report_ca_certificate) so Learning APIs stores both, hands the cert
     # to clinics and the pair back to the aggregator on later runs. Absent on every other message.
     ca_certificate: Annotated[Optional[str], Field(default=None, alias="caCertificate")]
-    ca_private_key: Annotated[Optional[str], Field(default=None, alias="caPrivateKey")]
+    ca_private_key: Annotated[Optional[str], Field(default=None, alias="caPrivateKey", repr=False)]
     # "FL_NET" (default, for backward compatibility with senders that predate this field) or
     # "FLOWER" - which engine's path FederatedWorkerManager dispatches this start to. Kept as a
     # bare tag on the existing message (not a new message type) per Julian's review: "can't the
@@ -120,6 +120,35 @@ class FederatedRoundMessageCreateDTO(BaseModel):
     to_participant: Annotated[Optional[str], Field(default=None, alias="toParticipant")]
     communication_id: Annotated[Optional[str], Field(default=None, alias="communicationId")]
     payload_preview: Annotated[Optional[str], Field(default=None, alias="payloadPreview")]
+
+
+class FlowerSupernodeKeyDTO(BaseModel):
+    """A clinic SuperNode's OpenSSH EC public key, on its way to the platform's aggregator."""
+    model_config = ConfigDict(populate_by_name=True, extra="allow")
+
+    request_id: Annotated[str, Field(alias="requestId")]
+    public_key: Annotated[str, Field(alias="publicKey")]
+    # Set by global (the clinic's participant id) so `flwr supernode list` shows who is who.
+    name: Optional[str] = None
+
+
+class FlowerSupernodeRegisteredDTO(BaseModel):
+    """The aggregator's answer to a FlowerSupernodeKeyDTO, on its way back to the clinic."""
+    model_config = ConfigDict(populate_by_name=True, extra="allow")
+
+    request_id: Annotated[str, Field(alias="requestId")]
+    success: bool
+    error: Optional[str] = None
+
+
+class SendFlowerSupernodeKeyDTO(BaseSocketMessage[FlowerSupernodeKeyDTO]):
+    type: WebsocketMessageTypes = Field(default=WebsocketMessageTypes.FLOWER_SUPERNODE_KEY)
+    run_type: RunType = Field(default=RunType.FEDERATED_RUN, alias="runType")
+
+
+class SendFlowerSupernodeRegisteredDTO(BaseSocketMessage[FlowerSupernodeRegisteredDTO]):
+    type: WebsocketMessageTypes = Field(default=WebsocketMessageTypes.FLOWER_SUPERNODE_REGISTERED)
+    run_type: RunType = Field(default=RunType.FEDERATED_RUN, alias="runType")
 
 
 class SendFederatedUpdateRunDTO(BaseSocketMessage[FederatedTestRunCreateDTO]):

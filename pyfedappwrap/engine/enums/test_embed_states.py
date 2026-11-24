@@ -28,6 +28,11 @@ class WebsocketMessageTypes(Enum):
     FINISH_FEDERATED_RUN = "FINISH_FEDERATED_RUN"
     FEDERATED_PARTICIPANT_UPDATE = "FEDERATED_PARTICIPANT_UPDATE"
     FEDERATED_ROUND_MESSAGE = "FEDERATED_ROUND_MESSAGE"
+    # Flower SuperNode auth registration (Task 5): a clinic's public key travels clinic app ->
+    # local -> global -> the platform's aggregator app as FLOWER_SUPERNODE_KEY; the result comes
+    # back the same way as FLOWER_SUPERNODE_REGISTERED, matched by its requestId.
+    FLOWER_SUPERNODE_KEY = "FLOWER_SUPERNODE_KEY"
+    FLOWER_SUPERNODE_REGISTERED = "FLOWER_SUPERNODE_REGISTERED"
 
     SEND_MODEL = "SEND_MODEL"
     SERVER_ERROR = "SERVER_ERROR"

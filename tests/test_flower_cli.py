@@ -8,6 +8,7 @@ import pytest
 from pyfedappwrap.engine.service.flower.cli import (
     FlowerCli,
     FlowerCliError,
+    is_already_registered,
     status_is_finished,
     status_is_successful,
 )
@@ -114,3 +115,43 @@ def test_status_is_finished(status, expected):
 ])
 def test_status_is_successful(status, expected):
     assert status_is_successful(status) is expected
+
+
+def test_supernode_register_returns_the_node_id_flower_assigned(monkeypatch):
+    """Output shape confirmed against a real Flower 1.43 SuperLink with --enable-supernode-auth."""
+    cli = FlowerCli()
+    run_call = Mock(return_value=completed(json.dumps({"success": True, "node-id": 17376333687335559091})))
+    monkeypatch.setattr(subprocess, "run", run_call)
+
+    node_id = cli.supernode_register(Path("key.pub"), "flnet-local", name="clinic-1")
+
+    assert node_id == "17376333687335559091"
+    assert run_call.call_args.args[0] == [
+        "flwr", "supernode", "register", "key.pub", "flnet-local", "--format", "json",
+        "--name", "clinic-1",
+    ]
+
+
+def test_supernode_register_failure_for_an_already_registered_key_is_recognizable(monkeypatch):
+    cli = FlowerCli()
+    monkeypatch.setattr(subprocess, "run", Mock(return_value=completed(json.dumps({
+        "success": False,
+        "error-message": "Using SuperLink: t (127.0.0.1:18000)\n\n[code: 23] Public key already in use.",
+    }))))
+
+    with pytest.raises(FlowerCliError) as raised:
+        cli.supernode_register(Path("key.pub"), "flnet-local")
+
+    assert is_already_registered(raised.value)
+
+
+def test_supernode_register_other_failures_are_not_mistaken_for_already_registered(monkeypatch):
+    cli = FlowerCli()
+    monkeypatch.setattr(subprocess, "run", Mock(return_value=completed(json.dumps({
+        "success": False, "error-message": "Connection to the SuperLink is unavailable.",
+    }))))
+
+    with pytest.raises(FlowerCliError) as raised:
+        cli.supernode_register(Path("key.pub"), "flnet-local")
+
+    assert not is_already_registered(raised.value)
