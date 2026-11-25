@@ -17,9 +17,11 @@ class FakeSupervisor:
 
     instances: list["FakeSupervisor"] = []
 
-    def __init__(self, binary, args):
+    def __init__(self, binary, args, *, cwd=None, extra_env=None):
         self.binary = binary
         self.args = args
+        self.cwd = cwd
+        self.extra_env = extra_env or {}
         self.started = False
         self.stopped = False
         self.alive = True
@@ -45,6 +47,22 @@ def fake_supervisor(monkeypatch):
     FakeSupervisor.instances = []
     monkeypatch.setattr(lifecycle_module, "FlowerProcessSupervisor", FakeSupervisor)
     yield FakeSupervisor
+
+
+@pytest.fixture(autouse=True)
+def superlink_listens_at_once(monkeypatch):
+    """The fake supervisor opens no port; `_wait_until_listening` has its own tests below."""
+    ports = []
+    monkeypatch.setattr(FlowerRunLifecycle, "_wait_until_listening",
+                        lambda self, port, timeout=None: ports.append(port))
+    return ports
+
+
+@pytest.fixture(autouse=True)
+def model_dir(monkeypatch, tmp_path):
+    directory = tmp_path / "model"
+    monkeypatch.setattr(lifecycle_module.system_settings, "model_dir", str(directory))
+    return directory
 
 
 @pytest.fixture(autouse=True)
@@ -316,3 +334,149 @@ def test_register_supernode_after_the_run_ended_raises():
 
     with pytest.raises(FlowerCliError):
         lc.register_supernode("ecdsa-sha2-nistp384 AAAA")
+
+
+# --- Model-save confirmation (#11 Task 6) ---
+
+def _completing_run(lc, *, saves=None):
+    """Makes the fake run complete; `saves` writes files into the model dir while it "runs"."""
+    lc.cli.run.return_value = "1"
+
+    def list_run(federation, run_id):
+        if saves:
+            saves()
+        return {"status": "finished:completed"}
+    lc.cli.list_run.side_effect = list_run
+
+
+def test_run_as_aggregator_starts_the_superlink_in_the_model_dir_with_model_dir_set(model_dir):
+    lc = FlowerRunLifecycle(FlowerApp(), cli=Mock())
+    _completing_run(lc)
+
+    lc.run_as_aggregator()
+
+    supervisor = FakeSupervisor.instances[0]
+    assert supervisor.cwd == model_dir.resolve()
+    assert supervisor.extra_env == {"MODEL_DIR": str(model_dir.resolve())}
+    assert model_dir.is_dir()
+
+
+def test_run_as_aggregator_succeeds_with_the_model_the_server_app_saved(model_dir):
+    lc = FlowerRunLifecycle(FlowerApp(model_file="final_model.npz"), cli=Mock())
+    _completing_run(lc, saves=lambda: (model_dir / "final_model.npz").write_bytes(b"weights"))
+
+    success, error = lc.run_as_aggregator()
+
+    assert (success, error) == (True, None)
+    assert lc.saved_model_path() == model_dir.resolve() / "final_model.npz"
+
+
+def test_run_as_aggregator_fails_a_completed_run_that_saved_no_model(model_dir):
+    lc = FlowerRunLifecycle(FlowerApp(model_file="final_model.npz"), cli=Mock())
+    _completing_run(lc)
+
+    success, error = lc.run_as_aggregator()
+
+    assert success is False
+    assert "saved no model" in error and "final_model.npz" in error
+    assert lc.saved_model_path() is None
+
+
+def test_run_as_aggregator_does_not_take_a_model_left_over_from_an_earlier_run(model_dir):
+    import os
+    model_dir.mkdir(parents=True)
+    stale = model_dir / "final_model.npz"
+    stale.write_bytes(b"old weights")
+    os.utime(stale, (1_000_000, 1_000_000))
+    lc = FlowerRunLifecycle(FlowerApp(model_file="final_model.npz"), cli=Mock())
+    _completing_run(lc)
+
+    success, error = lc.run_as_aggregator()
+
+    assert success is False
+    assert "earlier run" in error
+
+
+def test_run_as_aggregator_without_a_declared_model_file_checks_nothing():
+    lc = FlowerRunLifecycle(FlowerApp(), cli=Mock())
+    _completing_run(lc)
+
+    assert lc.run_as_aggregator() == (True, None)
+    assert lc.saved_model_path() is None
+
+
+def test_a_failed_run_is_not_checked_for_a_model(model_dir):
+    lc = FlowerRunLifecycle(FlowerApp(model_file="final_model.npz"), cli=Mock())
+    lc.cli.run.return_value = "1"
+    lc.cli.list_run.return_value = {"status": "finished:failed", "status-details": "boom"}
+
+    assert lc.run_as_aggregator() == (False, "boom")
+
+
+@pytest.mark.parametrize("bad", ["", "/abs/model.npz", "../model.npz", "sub/../../model.npz"])
+def test_flower_app_rejects_a_model_file_outside_the_model_dir(bad):
+    with pytest.raises(ValueError):
+        FlowerApp(model_file=bad)
+
+
+# --- Waiting for the SuperLink before `flwr run` ---
+
+def test_run_as_aggregator_waits_for_the_superlink_port_before_flwr_run(superlink_listens_at_once):
+    lc = FlowerRunLifecycle(FlowerApp(), cli=Mock())
+    lc.cli.run.side_effect = lambda *a, **k: (superlink_listens_at_once.append("flwr run"), "1")[1]
+    lc.cli.list_run.return_value = {"status": "finished:completed"}
+
+    lc.run_as_aggregator(port=9000)
+
+    assert superlink_listens_at_once == [9000, "flwr run"]
+
+
+def test_run_as_aggregator_returns_a_flwr_cli_error_as_a_failed_run():
+    lc = FlowerRunLifecycle(FlowerApp(), cli=Mock())
+    lc.cli.run.side_effect = FlowerCliError("flwr run failed: no such app")
+
+    assert lc.run_as_aggregator() == (False, "flwr run failed: no such app")
+    assert FakeSupervisor.instances[0].stopped
+
+
+def _lifecycle_with(supervisor):
+    lc = FlowerRunLifecycle(FlowerApp(), cli=Mock())
+    lc._supervisor = supervisor
+    return lc
+
+
+def test_wait_until_listening_returns_once_the_port_accepts_connections(monkeypatch):
+    import socket
+    monkeypatch.undo()  # the real method, not the autouse stub
+    server = socket.socket()
+    server.bind(("127.0.0.1", 0))
+    server.listen()
+    try:
+        _lifecycle_with(FakeSupervisor("flower-superlink", []))._wait_until_listening(
+            server.getsockname()[1], timeout=5)
+    finally:
+        server.close()
+
+
+def _free_port():
+    import socket
+    with socket.socket() as probe:
+        probe.bind(("127.0.0.1", 0))
+        return probe.getsockname()[1]
+
+
+def test_wait_until_listening_fails_fast_once_the_superlink_died(monkeypatch):
+    monkeypatch.undo()
+    supervisor = FakeSupervisor("flower-superlink", [])
+    supervisor.alive = False
+
+    with pytest.raises(FlowerProcessError, match="exited"):
+        _lifecycle_with(supervisor)._wait_until_listening(_free_port(), timeout=30)
+
+
+def test_wait_until_listening_gives_up_after_the_timeout(monkeypatch):
+    monkeypatch.undo()
+
+    with pytest.raises(FlowerProcessError, match="did not accept connections"):
+        _lifecycle_with(FakeSupervisor("flower-superlink", []))._wait_until_listening(
+            _free_port(), timeout=0.5)

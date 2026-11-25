@@ -79,3 +79,45 @@ def test_stop_kills_a_process_that_ignores_sigterm():
     supervisor.stop(timeout=1.0)
 
     assert not supervisor.is_alive()
+
+
+def test_a_process_that_writes_more_than_a_pipe_buffer_does_not_block():
+    # ~1 MiB of output: without the supervisor reading it continuously, the child blocks once
+    # the OS pipe buffer (~64 KiB) is full and never exits.
+    supervisor = FlowerProcessSupervisor(sys.executable, [
+        "-c", "import sys\nfor i in range(20000): print('x' * 50)\nprint('done')",
+    ])
+    supervisor.start()
+    try:
+        supervisor._process.wait(timeout=10)
+    finally:
+        supervisor.stop()
+    assert supervisor.exit_code() == 0
+
+
+def test_check_alive_reports_only_the_tail_of_a_long_output():
+    supervisor = FlowerProcessSupervisor(sys.executable, [
+        "-c", "for i in range(500): print(f'line {i}')\nexit(3)",
+    ])
+    supervisor.start()
+    supervisor._process.wait(timeout=10)
+
+    with pytest.raises(FlowerProcessError) as info:
+        supervisor.check_alive()
+
+    message = str(info.value)
+    assert "exited with code 3" in message
+    assert "line 499" in message
+    assert "line 0\n" not in message
+
+
+def test_the_process_runs_in_the_given_directory_with_the_extra_env(tmp_path):
+    supervisor = FlowerProcessSupervisor(sys.executable, [
+        "-c", "import os; open('seen.txt', 'w').write(os.environ['MODEL_DIR'] + '|' + os.environ['PATH'])",
+    ], cwd=tmp_path, extra_env={"MODEL_DIR": "/models"})
+    supervisor.start()
+    supervisor._process.wait(timeout=10)
+
+    model_dir, path = (tmp_path / "seen.txt").read_text().split("|", 1)
+    assert model_dir == "/models"
+    assert path  # the rest of the environment is kept, not replaced

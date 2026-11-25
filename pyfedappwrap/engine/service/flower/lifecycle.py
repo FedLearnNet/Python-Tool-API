@@ -2,8 +2,7 @@
 (SuperLink for the platform's own aggregator attempt, SuperNode for a clinic's participant
 attempt - the same AGGREGATOR/CLIENT distinction FL-Net's own path already uses), and for the
 aggregator, drives `flwr run`/`flwr list` to completion and reports status back through the
-same `FederatedStatusReporter` FL-Net's own path already uses - there is no separate Flower
-status-relay mechanism, by design (see Flower_Integration_Plan.md's resolved #13<->#11 contract).
+`FederatedStatusReporter`.
 
 The client (SuperNode) side intentionally does *not* poll `flwr list` at all: a SuperNode has no
 API to ask "is my current run done", and in this architecture it doesn't need one - the
@@ -14,12 +13,15 @@ finishes, the same way it already does for every other attempt type - see
 from __future__ import annotations
 
 import logging
+import os
+import socket
 import tempfile
 import threading
 import time
 from pathlib import Path
 from typing import Optional
 
+from pyfedappwrap.engine.config.system_config import system_settings
 from pyfedappwrap.engine.service.flower.cli import (
     FlowerCli,
     FlowerCliError,
@@ -33,6 +35,8 @@ from pyfedappwrap.learning.federated.flower_app import FlowerApp
 
 DEFAULT_SUPERLINK_PORT = 8000
 DEFAULT_POLL_INTERVAL_SECONDS = 3.0
+# How long a freshly started SuperLink may take to accept connections.
+SUPERLINK_STARTUP_TIMEOUT_SECONDS = 60.0
 
 
 class FlowerRunLifecycle:
@@ -46,6 +50,7 @@ class FlowerRunLifecycle:
         self._supernode_auth = False
         self._registered_keys: set[str] = set()
         self._register_lock = threading.Lock()
+        self._saved_model_path: Optional[Path] = None
 
     def run_as_aggregator(
             self,
@@ -63,6 +68,10 @@ class FlowerRunLifecycle:
         SuperLink process dies - callers run this on their own worker thread, same as FL-Net's
         own `_run_federated`.
 
+        A run Flower reports as `finished:completed` still only counts as a success if the app's
+        declared `model_file` was written during it (see `FlowerApp`); `saved_model_path()`
+        then gives its path.
+
         Runs `--insecure` unless all three of `ssl_certfile`/`ssl_keyfile`/`ssl_ca_certfile` are
         given. `enable_supernode_auth` defaults to "on exactly when TLS is": with it, only
         SuperNodes registered through `register_supernode` may connect (Task 5). It can't be on
@@ -79,9 +88,20 @@ class FlowerRunLifecycle:
             args = ["--insecure", "--host", "0.0.0.0", "--port", str(port)]
         if enable_supernode_auth:
             args.append("--enable-supernode-auth")
-        self._supervisor = FlowerProcessSupervisor("flower-superlink", args)
+        model_dir = Path(system_settings.model_dir).resolve()
+        model_dir.mkdir(parents=True, exist_ok=True)
+        self._saved_model_path = None
+        # The ServerApp runs in a process the SuperLink spawns, so it inherits both: MODEL_DIR to
+        # save against explicitly, and the working directory for a bare relative file name (which
+        # otherwise lands wherever the engine happened to start - Flower_Integration_Plan.md).
+        self._supervisor = FlowerProcessSupervisor(
+            "flower-superlink", args, cwd=model_dir, extra_env={"MODEL_DIR": str(model_dir)})
+        started_at = time.time()
         self._supervisor.start()
         try:
+            # `flwr run` right after the start fails with "Connection to the SuperLink is
+            # unavailable" - it doesn't wait for the SuperLink itself (seen with real 1.43).
+            self._wait_until_listening(port)
             federation = ensure_local_federation(
                 port, ca_certfile=ssl_ca_certfile if tls_enabled else None)
             self._supernode_auth = enable_supernode_auth
@@ -100,14 +120,51 @@ class FlowerRunLifecycle:
                     break
                 time.sleep(poll_interval)
 
-            if status_is_successful(status_dict.get("status")):
-                return True, None
-            return False, status_dict.get("status-details") or status_dict.get("status")
-        except FlowerProcessError as exc:
+            if not status_is_successful(status_dict.get("status")):
+                return False, status_dict.get("status-details") or status_dict.get("status")
+            return self._confirm_model_saved(model_dir, started_at)
+        except (FlowerProcessError, FlowerCliError) as exc:
             return False, str(exc)
         finally:
             self._federation = None
             self._supervisor.stop()
+
+    def _wait_until_listening(
+            self, port: int, timeout: float = SUPERLINK_STARTUP_TIMEOUT_SECONDS) -> None:
+        deadline = time.monotonic() + timeout
+        while True:
+            self._supervisor.check_alive()
+            try:
+                with socket.create_connection(("127.0.0.1", port), timeout=1.0):
+                    return
+            except OSError:
+                if time.monotonic() >= deadline:
+                    raise FlowerProcessError(
+                        f"flower-superlink did not accept connections on port {port} "
+                        f"within {timeout:.0f}s")
+                time.sleep(0.2)
+
+    def _confirm_model_saved(
+            self, model_dir: Path, started_at: float) -> tuple[bool, Optional[str]]:
+        model_file = self.flower_app.model_file
+        if model_file is None:
+            return True, None
+        model_path = model_dir / model_file
+        if not model_path.is_file():
+            return False, (f"The Flower run completed, but its ServerApp saved no model at "
+                           f"{model_path} (FlowerApp.model_file)")
+        # A file left by an earlier run in the same directory is not this run's model. A small
+        # tolerance covers filesystems that store modification times coarser than time.time().
+        if os.path.getmtime(model_path) < started_at - 2.0:
+            return False, (f"The Flower run completed, but {model_path} was not written during "
+                           f"it - it is left over from an earlier run")
+        self._saved_model_path = model_path
+        return True, None
+
+    def saved_model_path(self) -> Optional[Path]:
+        """Aggregator only: the model the last successful run saved, or None if the app declares
+        no `model_file` (or the run didn't succeed)."""
+        return self._saved_model_path
 
     def register_supernode(self, public_key: str, *, name: Optional[str] = None) -> None:
         """Aggregator only: allows a clinic's SuperNode (by its OpenSSH EC public key) to connect

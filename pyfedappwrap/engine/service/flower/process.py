@@ -11,9 +11,15 @@ this supervises, so there's only ever one child process tree to manage here, not
 from __future__ import annotations
 
 import logging
+import os
 import subprocess
 import threading
-from typing import Optional, Sequence
+from collections import deque
+from pathlib import Path
+from typing import Mapping, Optional, Sequence
+
+# How many of the process's last output lines an error message carries.
+OUTPUT_TAIL_LINES = 50
 
 
 class FlowerProcessError(RuntimeError):
@@ -24,10 +30,15 @@ class FlowerProcessSupervisor:
     """Supervises one subprocess, started by `binary` + `args`. Not reentrant: one instance per
     process it supervises."""
 
-    def __init__(self, binary: str, args: Sequence[str]):
+    def __init__(self, binary: str, args: Sequence[str], *, cwd: Optional[Path] = None,
+                 extra_env: Optional[Mapping[str, str]] = None):
         self.binary = binary
         self.args = list(args)
+        self.cwd = cwd
+        self.extra_env = dict(extra_env or {})
         self._process: Optional[subprocess.Popen] = None
+        self._output_tail: deque[str] = deque(maxlen=OUTPUT_TAIL_LINES)
+        self._drain_thread: Optional[threading.Thread] = None
         self._lock = threading.Lock()
 
     def start(self) -> None:
@@ -35,12 +46,36 @@ class FlowerProcessSupervisor:
             if self._process is not None and self._process.poll() is None:
                 raise FlowerProcessError(f"{self.binary} is already running (pid {self._process.pid})")
             logging.info("Starting %s %s", self.binary, " ".join(self.args))
+            env = {**os.environ, **self.extra_env} if self.extra_env else None
+            self._output_tail.clear()
             self._process = subprocess.Popen(  # noqa: S603 - binary/args are our own config, not user input
                 [self.binary, *self.args],
                 stdout=subprocess.PIPE,
                 stderr=subprocess.STDOUT,
                 text=True,
+                cwd=self.cwd,
+                env=env,
             )
+            # The pipe must be read continuously: once its OS buffer (~64 KiB) fills up, the
+            # child blocks on its next log line and a long training run silently hangs.
+            self._drain_thread = threading.Thread(
+                target=self._drain, args=(self._process,),
+                name=f"{self.binary}-output", daemon=True)
+            self._drain_thread.start()
+
+    def _drain(self, process: subprocess.Popen) -> None:
+        for line in process.stdout:
+            line = line.rstrip()
+            if line:
+                self._output_tail.append(line)
+                logging.info("[%s] %s", self.binary, line)
+
+    def _wait_for_output(self, timeout: float = 2.0) -> str:
+        """The last lines the process wrote, once its output has been read to the end (or after
+        `timeout`, if a grandchild still holds the pipe open)."""
+        if self._drain_thread is not None:
+            self._drain_thread.join(timeout)
+        return "\n".join(self._output_tail)
 
     def is_alive(self) -> bool:
         with self._lock:
@@ -57,7 +92,7 @@ class FlowerProcessSupervisor:
                 raise FlowerProcessError(f"{self.binary} was never started")
             exit_code = self._process.poll()
             if exit_code is not None:
-                output = self._process.stdout.read() if self._process.stdout else ""
+                output = self._wait_for_output()
                 raise FlowerProcessError(
                     f"{self.binary} exited with code {exit_code}"
                     + (f": {output.strip()}" if output.strip() else "")

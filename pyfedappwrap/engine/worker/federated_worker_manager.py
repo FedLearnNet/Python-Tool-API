@@ -125,7 +125,7 @@ class FederatedWorkerManager(Observer):
         # Same message, same entry point either way - just a different method per engine:
         # an if/else on the communication engine, not a separate message type
         if run_dto.communication_engine == "FLOWER":
-            target, args = self._start_federated_run_flower, (run_dto, run_type)
+            target, args = self._start_federated_run_flower, (run_dto, run_type, upload_client)
         else:
             target, args = self._start_federated_run_flnet, (run_dto, run_type, upload_client)
 
@@ -281,7 +281,9 @@ class FederatedWorkerManager(Observer):
         with self._lock:
             self._flower_lifecycles.pop(run_id, None)
 
-    def _start_federated_run_flower(self, run_dto: FederatedTestRunCreateDTO, run_type: Any) -> None:
+    def _start_federated_run_flower(self, run_dto: FederatedTestRunCreateDTO, run_type: Any,
+                                    upload_client=None) -> None:
+        upload_client = upload_client or self.upload_client
         run_id = run_dto.id
         reporter = FederatedStatusReporter(self.ws_client, run_id, run_type=RunType.FEDERATED_RUN)
         reporter.update_run(status="STARTED", current_round=0)
@@ -336,6 +338,9 @@ class FederatedWorkerManager(Observer):
                     with self._lock:
                         self._flower_aggregator = None
                 self._discard_flower_lifecycle(run_id)
+                if success:
+                    error = self._upload_flower_model(lifecycle, upload_client, run_id)
+                    success = error is None
                 reporter.finish_run(status="FINISHED" if success else "ERROR", error=error)
             else:
                 cfg = run_dto.config
@@ -377,6 +382,28 @@ class FederatedWorkerManager(Observer):
             self._discard_flower_lifecycle(run_id)
             logging.exception("Flower run %s crashed: %s", run_id, exc)
             reporter.finish_run(status="ERROR", error=f"{type(exc).__name__}: {exc}")
+
+    @staticmethod
+    def _upload_flower_model(
+            lifecycle: FlowerRunLifecycle, upload_client, run_id: int) -> Optional[str]:
+        """Uploads the model the aggregator's ServerApp saved, as FL-Net's path does through
+        ModelSaver - but a failed upload fails the run here: the platform's attempt is the step's
+        selected attempt, so a run reported FINISHED without its model would leave the step
+        without one. Returns an error message, or None."""
+        model_path = lifecycle.saved_model_path()
+        if model_path is None:
+            return None
+        if upload_client is None:
+            logging.warning("No upload client, not uploading the Flower model %s", model_path)
+            return None
+        try:
+            upload_client.upload_model_file(
+                run_id=run_id, name=model_path.name, file_path=str(model_path))
+        except Exception as exc:  # noqa: BLE001 - any failure means the model didn't arrive
+            logging.exception("Uploading the Flower model %s failed", model_path)
+            return f"Uploading the model {model_path.name} failed: {type(exc).__name__}: {exc}"
+        logging.info("Uploaded the Flower model %s for run %s", model_path, run_id)
+        return None
 
     def _register_supernode(self, run_id: int) -> tuple[Optional[Path], Optional[str]]:
         """Clinic: generates this SuperNode's auth keypair and has the platform's aggregator

@@ -1,6 +1,7 @@
 """The START_FEDERATED_RUN dispatch split Julian approved: same message, same entry point,
 routed to _start_federated_run_flower vs _start_federated_run_flnet by communicationEngine."""
 import time
+from unittest.mock import Mock
 from typing import Any
 
 import pytest
@@ -52,7 +53,11 @@ class _FakeFlowerRunLifecycle:
         self.aggregator_kwargs: dict = {}
         self.registered: list = []
         self.register_error = None
+        self.saved_model = None
         _FakeFlowerRunLifecycle.instances.append(self)
+
+    def saved_model_path(self):
+        return self.saved_model
 
     def run_as_aggregator(self, *, report_running=None, **kwargs):
         self.aggregator_kwargs = kwargs
@@ -389,3 +394,74 @@ def test_the_aggregator_answers_failure_while_no_superlink_is_running():
 def _event(message_type, message):
     return BaseSocketMessage.model_validate({
         "type": message_type.value, "runType": "FEDERATED_RUN", "message": message})
+
+
+# --- Uploading the aggregator's model (#11 Task 6) ---
+
+class _RecordingUploadClient:
+    def __init__(self, error=None):
+        self.uploads: list[dict] = []
+        self.error = error
+
+    def upload_model_file(self, *, run_id, name, file_path):
+        if self.error:
+            raise self.error
+        self.uploads.append({"run_id": run_id, "name": name, "file_path": file_path})
+
+
+def _aggregator_saving(path):
+    def init(flower_app):
+        lc = _FakeFlowerRunLifecycle(flower_app)
+        lc.saved_model = path
+        return lc
+    return init
+
+
+def test_the_aggregator_uploads_the_saved_model_before_reporting_finished(monkeypatch, tmp_path):
+    model = tmp_path / "final_model.npz"
+    monkeypatch.setattr(federated_worker_manager, "FlowerRunLifecycle", _aggregator_saving(model))
+    manager = make_manager()
+    upload_client = _RecordingUploadClient()
+
+    manager._start_federated_run_flower(aggregator_run_dto(), RunType.FEDERATED_RUN, upload_client)
+
+    assert upload_client.uploads == [{"run_id": 1, "name": "final_model.npz", "file_path": str(model)}]
+    assert manager.ws_client.statuses()[-1] == "FINISHED"
+
+
+def test_a_failed_model_upload_fails_the_aggregator_run(monkeypatch, tmp_path):
+    model = tmp_path / "final_model.npz"
+    monkeypatch.setattr(federated_worker_manager, "FlowerRunLifecycle", _aggregator_saving(model))
+    manager = make_manager()
+
+    manager._start_federated_run_flower(aggregator_run_dto(), RunType.FEDERATED_RUN,
+                                        _RecordingUploadClient(error=ConnectionError("refused")))
+
+    finish = manager.ws_client.messages[-1].message
+    assert finish.status == "ERROR"
+    assert "final_model.npz" in finish.error and "refused" in finish.error
+
+
+def test_an_aggregator_run_without_a_saved_model_uploads_nothing():
+    manager = make_manager()
+    upload_client = _RecordingUploadClient()
+
+    manager._start_federated_run_flower(aggregator_run_dto(), RunType.FEDERATED_RUN, upload_client)
+
+    assert upload_client.uploads == []
+    assert manager.ws_client.statuses()[-1] == "FINISHED"
+
+
+def test_a_flower_start_message_hands_the_execution_upload_client_to_the_flower_path(monkeypatch):
+    manager = make_manager()
+    scoped = _RecordingUploadClient()
+    manager.upload_client = Mock(for_execution=Mock(return_value=scoped))
+    started = []
+    monkeypatch.setattr(manager, "_start_federated_run_flower",
+                        lambda run_dto, run_type, upload_client: started.append(upload_client))
+
+    manager._handle_start(aggregator_run_dto().model_dump(by_alias=True), run_type=RunType.FEDERATED_RUN)
+    for thread in list(manager._active_runs.values()):
+        thread.join(timeout=5)
+
+    assert started == [scoped]
